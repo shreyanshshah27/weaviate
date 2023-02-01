@@ -85,6 +85,11 @@ for the objects list operation typically these are written to a http.Request
 */
 type ObjectsListParams struct {
 
+	/*After
+	  The starting ID of the result window.
+
+	*/
+	After *string
 	/*Class
 	  Class parameter specifies the class from which to query objects
 
@@ -152,6 +157,17 @@ func (o *ObjectsListParams) WithHTTPClient(client *http.Client) *ObjectsListPara
 // SetHTTPClient adds the HTTPClient to the objects list params
 func (o *ObjectsListParams) SetHTTPClient(client *http.Client) {
 	o.HTTPClient = client
+}
+
+// WithAfter adds the after to the objects list params
+func (o *ObjectsListParams) WithAfter(after *string) *ObjectsListParams {
+	o.SetAfter(after)
+	return o
+}
+
+// SetAfter adds the after to the objects list params
+func (o *ObjectsListParams) SetAfter(after *string) {
+	o.After = after
 }
 
 // WithClass adds the class to the objects list params
@@ -227,6 +243,22 @@ func (o *ObjectsListParams) WriteToRequest(r runtime.ClientRequest, reg strfmt.R
 		return err
 	}
 	var res []error
+
+	if o.After != nil {
+
+		// query param after
+		var qrAfter string
+		if o.After != nil {
+			qrAfter = *o.After
+		}
+		qAfter := qrAfter
+		if qAfter != "" {
+			if err := r.SetQueryParam("after", qAfter); err != nil {
+				return err
+			}
+		}
+
+	}
 
 	if o.Class != nil {
 

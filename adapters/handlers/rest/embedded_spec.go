@@ -929,6 +929,9 @@ func init() {
         "operationId": "objects.list",
         "parameters": [
           {
+            "$ref": "#/parameters/CommonAfterParameterQuery"
+          },
+          {
             "$ref": "#/parameters/CommonOffsetParameterQuery"
           },
           {
@@ -4202,6 +4205,12 @@ func init() {
     }
   },
   "parameters": {
+    "CommonAfterParameterQuery": {
+      "type": "string",
+      "description": "The starting ID of the result window.",
+      "name": "after",
+      "in": "query"
+    },
     "CommonClassParameterQuery": {
       "type": "string",
       "description": "Class parameter specifies the class from which to query objects",
@@ -5207,6 +5216,12 @@ func init() {
         "summary": "Get a list of Objects.",
         "operationId": "objects.list",
         "parameters": [
+          {
+            "type": "string",
+            "description": "The starting ID of the result window.",
+            "name": "after",
+            "in": "query"
+          },
           {
             "type": "integer",
             "format": "int64",
@@ -8730,6 +8745,12 @@ func init() {
     }
   },
   "parameters": {
+    "CommonAfterParameterQuery": {
+      "type": "string",
+      "description": "The starting ID of the result window.",
+      "name": "after",
+      "in": "query"
+    },
     "CommonClassParameterQuery": {
       "type": "string",
       "description": "Class parameter specifies the class from which to query objects",

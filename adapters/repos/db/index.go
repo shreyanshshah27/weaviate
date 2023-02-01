@@ -776,7 +776,7 @@ func (i *Index) IncomingExists(ctx context.Context, shardName string,
 }
 
 func (i *Index) objectSearch(ctx context.Context, limit int, filters *filters.LocalFilter,
-	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort,
+	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort, scroll *filters.Scroll,
 	additional additional.Properties,
 ) ([]*storobj.Object, []float32, error) {
 	shardNames := i.getSchema.ShardingState(i.Config.ClassName.String()).
@@ -816,14 +816,13 @@ func (i *Index) objectSearch(ctx context.Context, limit int, filters *filters.Lo
 				}
 			}
 			shard := i.Shards[shardName]
-			objs, scores, err = shard.objectSearch(ctx, limit, filters, keywordRanking, sort, additional)
+			objs, scores, err = shard.objectSearch(ctx, limit, filters, keywordRanking, sort, scroll, additional)
 			if err != nil {
 				return nil, nil, errors.Wrapf(err, "shard %s", shard.ID())
 			}
-
 		} else {
 			objs, scores, err = i.remote.SearchShard(
-				ctx, shardName, nil, limit, filters, keywordRanking, sort, additional)
+				ctx, shardName, nil, limit, filters, keywordRanking, sort, scroll, additional)
 			if err != nil {
 				return nil, nil, errors.Wrapf(err, "remote shard %s", shardName)
 			}
@@ -871,6 +870,14 @@ func (i *Index) objectSearch(ctx context.Context, limit int, filters *filters.Lo
 		outObjects, _ = i.sortKeywordRanking(outObjects, outScores)
 	}
 
+	if scroll != nil {
+		if len(shardNames) > 1 {
+			sortedObjs := i.sortByID(outObjects, scroll.Limit)
+			return sortedObjs, nil, nil
+		}
+		return outObjects, nil, nil
+	}
+
 	// if this search was caused by a reference property
 	// search, we should not limit the number of results.
 	// for example, if the query contains a where filter
@@ -885,6 +892,12 @@ func (i *Index) objectSearch(ctx context.Context, limit int, filters *filters.Lo
 	}
 
 	return outObjects, outScores, nil
+}
+
+func (i *Index) sortByID(objects []*storobj.Object,
+	limit int,
+) []*storobj.Object {
+	return newIDSorter().sort(objects)
 }
 
 func (i *Index) sortKeywordRanking(objects []*storobj.Object,
@@ -941,7 +954,7 @@ func (i *Index) objectVectorSearch(ctx context.Context, searchVector []float32,
 				}
 			} else {
 				res, resDists, err = i.remote.SearchShard(
-					ctx, shardName, searchVector, limit, filters, nil, sort, additional)
+					ctx, shardName, searchVector, limit, filters, nil, sort, nil, additional)
 				if err != nil {
 					return errors.Wrapf(err, "remote shard %s", shardName)
 				}
@@ -980,7 +993,7 @@ func (i *Index) objectVectorSearch(ctx context.Context, searchVector []float32,
 func (i *Index) IncomingSearch(ctx context.Context, shardName string,
 	searchVector []float32, distance float32, limit int, filters *filters.LocalFilter,
 	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort,
-	additional additional.Properties,
+	scroll *filters.Scroll, additional additional.Properties,
 ) ([]*storobj.Object, []float32, error) {
 	shard, ok := i.Shards[shardName]
 	if !ok {
@@ -988,7 +1001,8 @@ func (i *Index) IncomingSearch(ctx context.Context, shardName string,
 	}
 
 	if searchVector == nil {
-		res, scores, err := shard.objectSearch(ctx, limit, filters, keywordRanking, sort, additional)
+		// TODO: after
+		res, scores, err := shard.objectSearch(ctx, limit, filters, keywordRanking, sort, scroll, additional)
 		if err != nil {
 			return nil, nil, errors.Wrapf(err, "shard %s", shard.ID())
 		}

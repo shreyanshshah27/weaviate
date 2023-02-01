@@ -54,7 +54,7 @@ type objectsManager interface {
 	UpdateObject(_ context.Context, _ *models.Principal, class string, _ strfmt.UUID,
 		_ *models.Object, _ *additional.ReplicationProperties) (*models.Object, error)
 	HeadObject(_ context.Context, _ *models.Principal, class string, _ strfmt.UUID) (bool, *uco.Error)
-	GetObjects(context.Context, *models.Principal, *int64, *int64, *string, *string, additional.Properties) ([]*models.Object, error)
+	GetObjects(context.Context, *models.Principal, *int64, *int64, *string, *string, *string, additional.Properties) ([]*models.Object, error)
 	Query(ctx context.Context, principal *models.Principal, params *uco.QueryParams) ([]*models.Object, *uco.Error)
 	MergeObject(context.Context, *models.Principal, *models.Object, *additional.ReplicationProperties) *uco.Error
 	AddObjectReference(context.Context, *models.Principal, *uco.AddReferenceInput, *additional.ReplicationProperties) *uco.Error
@@ -188,7 +188,7 @@ func (h *objectHandlers) getObjects(params objects.ObjectsListParams,
 	var deprecationsRes []*models.Deprecation
 
 	list, err := h.manager.GetObjects(params.HTTPRequest.Context(), principal,
-		params.Offset, params.Limit, params.Sort, params.Order, additional)
+		params.Offset, params.Limit, params.Sort, params.Order, params.After, additional)
 	if err != nil {
 		switch err.(type) {
 		case errors.Forbidden:
@@ -227,6 +227,7 @@ func (h *objectHandlers) query(params objects.ObjectsListParams,
 		Class:      *params.Class,
 		Offset:     params.Offset,
 		Limit:      params.Limit,
+		After:      params.After,
 		Sort:       params.Sort,
 		Order:      params.Order,
 		Additional: additional,
