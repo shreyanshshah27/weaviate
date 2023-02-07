@@ -196,6 +196,59 @@ func TestFinderGetOne(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, obj3, got)
 	})
+
+	t.Run("AllRepairOneOverwrite", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj       = object(id, 3)
+			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 2}}
+			digestR3  = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR3, nil)
+
+		updates := []*objects.VObject{{
+			LatestObject:    &obj.Object,
+			StaleUpdateTime: 2,
+			Version:         0, // todo set when implemented
+		}}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, updates).Return(digestR2, errAny)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.Nil(t, got)
+		assert.Contains(t, err.Error(), "A:3")
+		assert.Contains(t, err.Error(), "B:2")
+		assert.Contains(t, err.Error(), "C:3")
+		assert.Contains(t, err.Error(), errAny.Error())
+	})
+
+	t.Run("AllRepairOneGetMostRecentObject", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj1      = object(id, 1)
+			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 2}}
+			digestR3  = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj1, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR3, nil)
+		// called during reparation to fetch the most recent object
+		f.RClient.On("FindObject", anyVal, nodes[2], cls, shard, id, proj, adds).Return(nilObject, errAny)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.Nil(t, got)
+		assert.Contains(t, err.Error(), "A:1")
+		assert.Contains(t, err.Error(), "B:2")
+		assert.Contains(t, err.Error(), "C:3")
+		assert.Contains(t, err.Error(), errAny.Error())
+	})
 }
 
 func TestFinderDeprecatedGetOne(t *testing.T) {
