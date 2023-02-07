@@ -45,13 +45,13 @@ func readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan result[*sto
 		for r := range ch {
 			resp := r.Response
 			if r.Err != nil {
-				counters = append(counters, objTuple{resp.sender,0, nil, 0, r.Err})
+				counters = append(counters, objTuple{resp.sender, 0, nil, 0, r.Err})
 				continue
 			}
-			counters = append(counters, objTuple{resp.sender,0, resp.data, 0, nil})
+			counters = append(counters, objTuple{resp.sender, 0, resp.Data, 0, nil})
 			max = 0
 			for i := range counters {
-				if compare(counters[i].o, resp.data) == 0 {
+				if compare(counters[i].o, resp.Data) == 0 {
 					counters[i].ack++
 				}
 				if max < counters[i].ack {
@@ -126,10 +126,10 @@ func readOneExists(ch <-chan simpleResult[existReply], st rState) (bool, error) 
 			counters = append(counters, boolTuple{resp.sender, 0, false, 0, r.Err})
 			continue
 		}
-		counters = append(counters, boolTuple{resp.sender, resp.UpdateTime, resp.data, 0, nil})
+		counters = append(counters, boolTuple{resp.sender, resp.UpdateTime, resp.Data, 0, nil})
 		max := 0
 		for i := range counters {
-			if r.Err == nil && counters[i].o == resp.data {
+			if r.Err == nil && counters[i].o == resp.Data {
 				counters[i].ack++
 			}
 			if max < counters[i].ack {
@@ -171,13 +171,13 @@ func readAll(ch <-chan simpleResult[getObjectsReply], N int, st rState) ([]*stor
 		if r.Err != nil {
 			fmt.Fprintf(&sb, "%s: %v ", resp.sender, r.Err)
 			continue
-		} else if n := len(resp.data); n != N {
+		} else if n := len(resp.Data); n != N {
 			fmt.Fprintf(&sb, "%s: number of objects %d != %d ", resp.sender, n, N)
 			continue
 		}
-		counters = append(counters, osTuple{resp.sender, resp.data, make([]int, N), nil})
+		counters = append(counters, osTuple{resp.sender, resp.Data, make([]int, N), nil})
 		M := 0
-		for i, x := range resp.data {
+		for i, x := range resp.Data {
 			max := 0
 			for j := range counters {
 				o := counters[j].data[i]

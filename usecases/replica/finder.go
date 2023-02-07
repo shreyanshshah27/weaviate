@@ -32,7 +32,7 @@ type (
 	senderReply[T any] struct {
 		sender     string // hostname of the sender
 		Version    int64  // sender's current version of the object
-		data       T      // the data sent by the sender
+		Data       T      // the data sent by the sender
 		UpdateTime int64  // sender's current update time
 		DigestRead bool
 	}
@@ -87,18 +87,30 @@ func (f *Finder) GetOneV2(ctx context.Context, l ConsistencyLevel, shard string,
 ) (*storobj.Object, error) {
 	c := newReadCoordinator[findOneReply](f, shard)
 	op := func(ctx context.Context, host string, fullRead bool) (findOneReply, error) {
-		obj, err := f.FindObject(ctx, host, f.class, shard, id, props, additional)
-		var uTime int64
-		if obj != nil {
-			uTime = obj.LastUpdateTimeUnix()
+		if fullRead {
+			obj, err := f.FindObject(ctx, host, f.class, shard, id, props, additional)
+			var uTime int64
+			if obj != nil {
+				uTime = obj.LastUpdateTimeUnix()
+			}
+			return findOneReply{host, -1, obj, uTime, false}, err
+		} else {
+			xs, err := f.DigestObjects(ctx, host, f.class, shard, []strfmt.UUID{id})
+			var x RepairResponse
+			if len(xs) == 1 {
+				x = xs[0]
+			}
+			if err == nil && len(xs) != 1 {
+				err = fmt.Errorf("digest read request: empty result")
+			}
+			return findOneReply{host, x.Version, nil, x.UpdateTime, true}, err
 		}
-		return findOneReply{host, -1, obj, uTime, false}, err
 	}
 	replyCh, state, err := c.Fetch2(ctx, l, op)
 	if err != nil {
 		return nil, err
 	}
-	result := <-f.readOne(replyCh, state)
+	result := <-f.readOne(ctx, shard, id, replyCh, state)
 	return result.data, result.err
 }
 
@@ -144,16 +156,16 @@ func (f *Finder) NodeObject(ctx context.Context, nodeName, shard string,
 	return f.RClient.FindObject(ctx, host, f.class, shard, id, props, additional)
 }
 
-func (f *Finder) readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan result[*storobj.Object] {
+func (f *Finder) readOne(ctx context.Context, shard string, id strfmt.UUID, ch <-chan simpleResult[findOneReply], st rState) <-chan result[*storobj.Object] {
 	// counters tracks the number of votes for each participant
 	resultCh := make(chan result[*storobj.Object], 1)
 	go func() {
 		defer close(resultCh)
 		var (
-			counters   = make([]objTuple, 0, len(st.Hosts))
-			winner     = 0
-			max        = 0
-			resultSent = false
+			counters = make([]objTuple, 0, len(st.Hosts))
+			// winner     = 0
+			max = 0
+			// resultSent = false
 			contentIdx = -1
 		)
 
@@ -166,8 +178,7 @@ func (f *Finder) readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan
 			if !resp.DigestRead {
 				contentIdx = len(counters)
 			}
-			counters = append(counters, objTuple{resp.sender, resp.UpdateTime, resp.data, 0, nil})
-
+			counters = append(counters, objTuple{resp.sender, resp.UpdateTime, resp.Data, 0, nil})
 			max = 0
 			for i := range counters {
 				if counters[i].UTime == resp.UpdateTime {
@@ -175,11 +186,12 @@ func (f *Finder) readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan
 				}
 				if max < counters[i].ack {
 					max = counters[i].ack
-					winner = i
+					// winner = i
 				}
-				if !resultSent && max >= st.Level && contentIdx >= 0 {
-					resultSent = true
+				if max >= st.Level && contentIdx >= 0 { //} !resultSent && max >= st.Level && contentIdx >= 0 {
+					// resultSent = true
 					resultCh <- result[*storobj.Object]{counters[contentIdx].o, nil}
+					return
 				}
 			}
 		}
@@ -188,37 +200,31 @@ func (f *Finder) readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan
 			resultCh <- result[*storobj.Object]{nil, fmt.Errorf("internal error: #responses %d index %d", n, contentIdx)}
 			return
 		}
-		// if counters[winner].UTime == counters[contentIdx].UTime {
-		// 	counters[winner].o = counters[contentIdx].o
-		// }
-		if obj, err := f.repairOne(counters, st, contentIdx); err == nil {
-			if !resultSent {
-				resultCh <- result[*storobj.Object]{obj, nil}
-			}
+
+		obj, err := f.repairOne(ctx, shard, id, counters, st, contentIdx)
+		if err == nil {
+			// if !resultSent {
+			resultCh <- result[*storobj.Object]{obj, nil}
+			//	}
 			return
 		}
-		if !resultSent {
-			var sb strings.Builder
-			for i, c := range counters {
-				if i != 0 {
-					sb.WriteString(", ")
-				}
-				if c.err != nil {
-					fmt.Fprintf(&sb, "%s: %s", c.sender, c.err.Error())
-				} else if c.o == nil {
-					fmt.Fprintf(&sb, "%s: 0", c.sender)
-				} else {
-					fmt.Fprintf(&sb, "%s: %d", c.sender, c.o.LastUpdateTimeUnix())
-				}
+		// if !resultSent {
+		var sb strings.Builder
+		for i, c := range counters {
+			if i != 0 {
+				sb.WriteByte(' ')
 			}
-			resultCh <- result[*storobj.Object]{nil, fmt.Errorf("%w %q %s", ErrConsistencyLevel, st.CLevel, sb.String())}
+			fmt.Fprintf(&sb, "%s:%d", c.sender, c.UTime)
 		}
+		// sb.WriteString(err.Error())
+		resultCh <- result[*storobj.Object]{nil, fmt.Errorf("%w %q: %q %v", ErrConsistencyLevel, st.CLevel, sb.String(), err)}
+		//}
 	}()
 	return resultCh
 }
 
 // repair one object on several nodes using last write wins strategy
-func (f *Finder) repairOne(ctx context.Context, counters []objTuple, st rState, shard string, contentIdx int) (*storobj.Object, err error) {
+func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, counters []objTuple, st rState, contentIdx int) (_ *storobj.Object, err error) {
 	var (
 		lastUTime int64
 		winnerIdx int
@@ -233,35 +239,27 @@ func (f *Finder) repairOne(ctx context.Context, counters []objTuple, st rState, 
 	if lastUTime < 1 {
 		return nil, fmt.Errorf("nil object")
 	}
-	
+
 	updates := counters[contentIdx].o
-	if counters[contentIdx].UTime != lastUTime {
-		updates, err = f.RClient.FindObject(ctx, counters[winnerIdx].sender, f.class, shard, counters[contentIdx].o.ID(), nil, additional.Properties{})
+	winner := counters[winnerIdx]
+	if updates.LastUpdateTimeUnix() != lastUTime {
+		updates, err = f.RClient.FindObject(ctx, winner.sender, f.class, shard, id,
+			search.SelectProperties{}, additional.Properties{})
 		if err != nil {
-			return nil, fmt.Errorf("get most recent object from %s: %w", counters[winnerIdx].sender,err)
+			return nil, fmt.Errorf("get most recent object from %s: %w", counters[winnerIdx].sender, err)
 		}
 	}
 
 	isNewObject := lastUTime == updates.CreationTimeUnix()
-	for i, x := range counters {
-		if x.UTime == 0  && !isNewObject{
+	for _, x := range counters {
+		if x.UTime == 0 && !isNewObject {
 			return nil, fmt.Errorf("conflict: object might have been deleted on node %q", x.sender)
 		}
 	}
 
 	// case where updateTime == createTime and all other object are nil
-
-	// if updatetime == createdtime overwrite
-	// TODO: if winner object is nil we need to tell the node to delete the object
+	// TODO: if winner object is nil we need to tell the node to delete the object.
 	// The adapter/repos/db/DB.overwriteObjects nil to be adjust to account for nil objects
-	// vots := counters[winnerIdx].ack
-	// winner := counters[winnerIdx]
-	// if vots < cLevel(Quorum, st.Len()) {
-	// 	return nil, fmt.Errorf("no majority found")
-	// }
-	// if counters[winnerIdx].UTime == 0 {
-	// 	return nil, fmt.Errorf("nil object")
-	// }
 
 	for _, c := range counters {
 		if c.UTime != lastUTime {
@@ -270,19 +268,18 @@ func (f *Finder) repairOne(ctx context.Context, counters []objTuple, st rState, 
 				StaleUpdateTime: c.UTime,
 				Version:         0, // todo set when implemented
 			}}
-			if c.o != nil {
-				resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(resp) > 0 && resp[0].Err != ""  && resp[0].UpdateTime != lastUTime{
-					return nil, fmt.Errorf("%s", resp[0].Err)
-				}
-				// fmt.Printf("repair: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, wName, winner.UTime, c.UTime)
-				// return winner.o, nil
-				// overwrite(ctx, c.sender, winner)
+			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
+			if err != nil {
+				fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+				return nil, fmt.Errorf("node %q could not repair object: %w", c.sender, err)
 			}
+			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
+				return nil, fmt.Errorf("%s", resp[0].Err)
+			}
+			fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+			// fmt.Printf("repair: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, wName, winner.UTime, c.UTime)
+			// return winner.o, nil
+			// overwrite(ctx, c.sender, winner)
 		}
 	}
 	return updates, nil

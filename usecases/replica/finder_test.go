@@ -19,10 +19,12 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/weaviate/weaviate/entities/additional"
 	"github.com/weaviate/weaviate/entities/models"
 	"github.com/weaviate/weaviate/entities/search"
 	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 func TestFinderReplicaNotFound(t *testing.T) {
@@ -79,6 +81,124 @@ func object(id strfmt.UUID, lastTime int64) *storobj.Object {
 }
 
 func TestFinderGetOne(t *testing.T) {
+	var (
+		id        = strfmt.UUID("123")
+		cls       = "C1"
+		shard     = "SH1"
+		nodes     = []string{"A", "B", "C"}
+		ctx       = context.Background()
+		adds      = additional.Properties{}
+		proj      = search.SelectProperties{}
+		nilObject *storobj.Object
+	)
+
+	t.Run("AllButOne", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj       = object(id, 3)
+			digestR   = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR, errAny)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR, nil)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.ErrorIs(t, err, errAny)
+		assert.Equal(t, nilObject, got)
+	})
+
+	t.Run("All", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj       = object(id, 3)
+			digestR   = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR, nil)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, obj, got)
+	})
+
+	t.Run("AllNilObject", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			// obj       = object(id, 3)
+			digestR = []RepairResponse{{ID: id.String(), UpdateTime: 0}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(nilObject, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR, nil)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, nilObject, got)
+	})
+
+	t.Run("AllRepairOne", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj       = object(id, 3)
+			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 2}}
+			digestR3  = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR3, nil)
+
+		updates := []*objects.VObject{{
+			LatestObject:    &obj.Object,
+			StaleUpdateTime: 2,
+			Version:         0, // todo set when implemented
+		}}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, updates).Return(digestR2, nil)
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, obj, got)
+	})
+
+	t.Run("AllRepairOneRetrieveContent", func(t *testing.T) {
+		var (
+			f         = newFakeFactory("C1", shard, nodes)
+			finder    = f.newFinder()
+			digestIDs = []strfmt.UUID{id}
+			obj2      = object(id, 2)
+			obj3      = object(id, 3)
+			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 2}}
+			digestR3  = []RepairResponse{{ID: id.String(), UpdateTime: 3}}
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, digestIDs).Return(digestR3, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, digestIDs).Return(digestR3, nil)
+		// called during reparation to fetch the most recent object
+		f.RClient.On("FindObject", anyVal, nodes[1], cls, shard, id, proj, adds).Return(obj3, nil)
+		f.RClient.On("FindObject", anyVal, nodes[2], cls, shard, id, proj, adds).Return(obj3, nil)
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[0], cls, shard, anyVal).
+			Return(digestR2, nil).RunFn = func(a mock.Arguments) {
+			updates := a[4].([]*objects.VObject)[0]
+			assert.Equal(t, int64(2), updates.StaleUpdateTime)
+			assert.Equal(t, &obj3.Object, updates.LatestObject)
+		}
+
+		got, err := finder.GetOneV2(ctx, All, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, obj3, got)
+	})
+}
+
+func TestFinderDeprecatedGetOne(t *testing.T) {
 	var (
 		id        = strfmt.UUID("123")
 		cls       = "C1"
