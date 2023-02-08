@@ -345,6 +345,58 @@ func TestFinderGetOneWithConsistencyLevelQuorum(t *testing.T) {
 	})
 }
 
+func TestFinderGetOneWithConsistencyLevelOne(t *testing.T) {
+	var (
+		id        = strfmt.UUID("123")
+		cls       = "C1"
+		shard     = "SH1"
+		nodes     = []string{"A", "B", "C"}
+		ctx       = context.Background()
+		adds      = additional.Properties{}
+		proj      = search.SelectProperties{}
+		nilObject *storobj.Object
+	)
+
+	t.Run("AllButOne", func(t *testing.T) {
+		var (
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+			obj    = object(id, 3)
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(nilObject, errAny)
+		f.RClient.On("FindObject", anyVal, nodes[1], cls, shard, id, proj, adds).Return(nilObject, errAny)
+		f.RClient.On("FindObject", anyVal, nodes[2], cls, shard, id, proj, adds).Return(obj, nil)
+
+		got, err := finder.GetOneV2(ctx, One, shard, id, proj, adds)
+		assert.ErrorIs(t, err, errAny)
+		assert.Equal(t, nilObject, got)
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		var (
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+			obj    = object(id, 3)
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(obj, nil)
+		got, err := finder.GetOneV2(ctx, One, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, obj, got)
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		var (
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+		)
+		f.RClient.On("FindObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(nilObject, nil)
+
+		got, err := finder.GetOneV2(ctx, One, shard, id, proj, adds)
+		assert.Nil(t, err)
+		assert.Equal(t, nilObject, got)
+	})
+}
+
 func TestFinderDeprecatedGetOne(t *testing.T) {
 	var (
 		id        = strfmt.UUID("123")
