@@ -270,7 +270,7 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 			}}
 			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
 			if err != nil {
-				//fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+				// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
 				return nil, fmt.Errorf("node %q could not repair object: %w", c.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
@@ -283,4 +283,112 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 		}
 	}
 	return updates, nil
+}
+
+// batchReply represents the data returned by sender
+// The returned data may result from a direct or digest read request
+type batchReply struct {
+	// Sender hostname of the sender
+	Sender string
+	// DigestRead is this reply from digest read?
+	DigestRead bool
+	// DirectData returned from a direct read request
+	DirectData []*storobj.Object
+	// DigestData returned from a digest read request
+	DigestData []RepairResponse
+}
+
+// GetAll gets all objects which satisfy the giving consistency
+func (f *Finder) GetAllV2(ctx context.Context, l ConsistencyLevel, shard string,
+	ids []strfmt.UUID,
+) ([]*storobj.Object, error) {
+	c := newReadCoordinator[batchReply](f, shard)
+	n := len(ids)
+	op := func(ctx context.Context, host string, fullRead bool) (batchReply, error) {
+		if fullRead {
+			xs, err := f.RClient.MultiGetObjects(ctx, host, f.class, shard, ids)
+			if m := len(xs); n != m {
+				err = fmt.Errorf("direct read expected %d got %d items", n, m)
+			}
+			return batchReply{Sender: host, DigestRead: false, DirectData: xs}, err
+		} else {
+			xs, err := f.DigestObjects(ctx, host, f.class, shard, ids)
+			if m := len(xs); n != m {
+				err = fmt.Errorf("direct read expected %d got %d items", n, m)
+			}
+			return batchReply{Sender: host, DigestRead: true, DigestData: xs}, err
+		}
+	}
+	replyCh, state, err := c.Fetch2(ctx, l, op)
+	if err != nil {
+		return nil, err
+	}
+	result := <-f.readAll(ctx, shard, ids, replyCh, state)
+	return result.data, result.err
+}
+
+type vote struct {
+	batchReply
+	Count []int
+	Err   error
+}
+
+func (r batchReply) UpdateTimeAt(idx int) int64 {
+	if r.DigestData != nil {
+		return r.DigestData[idx].UpdateTime
+	}
+	return r.DirectData[idx].LastUpdateTimeUnix()
+}
+
+type _Results result[[]*storobj.Object]
+
+func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, ch <-chan simpleResult[batchReply], st rState) <-chan _Results {
+	resultCh := make(chan _Results, 1)
+
+	go func() {
+		defer close(resultCh)
+		var (
+			N = len(ids) // number of requested objects
+			// votes counts number of votes per object for each node
+			votes      = make([]vote, 0, len(st.Hosts))
+			contentIdx = -1 // index of direct read reply
+		)
+
+		for r := range ch { // len(ch) == st.Level
+			resp := r.Response
+			if r.Err != nil { // a least one node is not responding
+				resultCh <- _Results{nil, r.Err}
+				return
+			}
+			if !resp.DigestRead {
+				contentIdx = len(votes)
+			}
+
+			votes = append(votes, vote{resp, make([]int, N), nil})
+			M := 0
+			for i := 0; i < N; i++ {
+				max := 0
+				lastTime := resp.UpdateTimeAt(i)
+
+				for j := range votes {
+					if votes[j].UpdateTimeAt(i) == lastTime {
+						votes[j].Count[i]++
+					}
+					if max < votes[j].Count[i] {
+						max = votes[j].Count[i]
+					}
+				}
+				if max >= st.Level {
+					M++
+				}
+			}
+
+			if M == N {
+				resultCh <- _Results{votes[contentIdx].DirectData, nil}
+				return
+			}
+		}
+	}()
+
+	return resultCh
 }
