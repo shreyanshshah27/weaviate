@@ -270,13 +270,13 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 			}}
 			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
 			if err != nil {
-				fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+				//fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
 				return nil, fmt.Errorf("node %q could not repair object: %w", c.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
 				return nil, fmt.Errorf("object changed in the meantime on node %s: %s", c.sender, resp[0].Err)
 			}
-			fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+			// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
 			// fmt.Printf("repair: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, wName, winner.UTime, c.UTime)
 			// return winner.o, nil
 			// overwrite(ctx, c.sender, winner)
