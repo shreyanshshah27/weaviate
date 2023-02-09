@@ -418,31 +418,32 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 		}
 	}
 	// find missing content
-	ys := make([]iTuple, 0, len(ids))
+	ms := make([]iTuple, 0, len(ids)) // mismatches
 	for i, p := range votes[contentIdx].DirectData {
 		if contentIdx != lastTimes[i].S {
-			ys = append(ys, lastTimes[i])
+			ms = append(ms, lastTimes[i])
 		} else {
 			result[i] = p
 		}
 	}
-	if len(ys) > 0 {
-		sort.SliceStable(ys, func(i, j int) bool { return ys[i].S < ys[j].S })
+	if len(ms) > 0 { // fetch most recent objects
+		// partition by hostname
+		sort.SliceStable(ms, func(i, j int) bool { return ms[i].S < ms[j].S })
 		partitions := make([]int, 0, len(votes)-2)
-		pre := ys[0].S
-		for i, y := range ys {
+		pre := ms[0].S
+		for i, y := range ms {
 			if y.S != pre {
 				partitions = append(partitions, i)
 				pre = y.S
 			}
 		}
-		partitions = append(partitions, len(ys))
+		partitions = append(partitions, len(ms))
 		start := 0
-		for _, end := range partitions {
-			receiver := votes[ys[start].O].Sender
+		for _, end := range partitions { // fetch diffs
+			receiver := votes[ms[start].O].Sender
 			query := make([]strfmt.UUID, end-start)
 			for j := 0; start < end; start++ {
-				query[j] = ids[ys[start].O]
+				query[j] = ids[ms[start].O]
 				j++
 			}
 			resp, err := f.RClient.MultiGetObjects(ctx, receiver, f.class, shard, query)
@@ -458,25 +459,38 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 				if resp[i] != nil {
 					cTime = resp[i].LastUpdateTimeUnix()
 				}
-				idx := ys[start-n+i].O
-				if lastTimes[idx].T < cTime {
+				idx := ms[start-n+i].O
+				if lastTimes[idx].T != cTime {
 					return _Results{nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)}
 				}
 				result[idx] = resp[i]
 			}
 		}
+		// repair
+		for _, vote := range votes {
+			receiver := vote.Sender
+			query := make([]*objects.VObject, 0, len(ids))
+			for j, x := range lastTimes {
+				if cTime := vote.UpdateTimeAt(j); x.T != cTime {
+					query = append(query, &objects.VObject{LatestObject: &result[j].Object, StaleUpdateTime: cTime})
+				}
+			}
+			if len(query) == 0 {
+				break
+			}
+			rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
+			if err != nil {
+				// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+				return _Results{nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)}
+			}
+			for _, r := range rs {
+				if r.Err != "" {
+					return _Results{nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)}
+				}
+			}
 
-		// preHost := votes[ys[0].S].Sender
-		// os := make([]strfmt.UUID, 0, len(ys))
-		// pre := ys[0].S
-		// for i, y := range ys {
-		// 	if y.S != pre || i == len(ys)-1 {
-		// 		os[i] = ids[y.O]
-		// 		os = os[:1]
-		// 	} else {
-		// 		os = append(os, ids[y.O])
-		// 	}
-		// }
+		}
+
 	}
-	return _Results{nil, nil}
+	return _Results{result, nil}
 }
