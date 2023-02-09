@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/go-openapi/strfmt"
@@ -388,7 +389,94 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 				return
 			}
 		}
+		resultCh <- f.repairAll(ctx, shard, ids, votes, st, contentIdx)
 	}()
 
 	return resultCh
+}
+
+func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID, votes []vote, st rState, contentIdx int) _Results {
+	type iTuple struct {
+		S int
+		O int
+		T int64
+	}
+
+	result := make([]*storobj.Object, len(ids))
+	lastTimes := make([]iTuple, len(ids))
+	// find most recent objects
+	for i, x := range votes[contentIdx].DirectData {
+		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.LastUpdateTimeUnix()}
+	}
+	for i, vote := range votes {
+		if i != contentIdx {
+			for j, x := range vote.DigestData {
+				if x.UpdateTime > lastTimes[j].T {
+					lastTimes[j] = iTuple{S: i, O: j, T: x.UpdateTime}
+				}
+			}
+		}
+	}
+	// find missing content
+	ys := make([]iTuple, 0, len(ids))
+	for i, p := range votes[contentIdx].DirectData {
+		if contentIdx != lastTimes[i].S {
+			ys = append(ys, lastTimes[i])
+		} else {
+			result[i] = p
+		}
+	}
+	if len(ys) > 0 {
+		sort.SliceStable(ys, func(i, j int) bool { return ys[i].S < ys[j].S })
+		partitions := make([]int, 0, len(votes)-2)
+		pre := ys[0].S
+		for i, y := range ys {
+			if y.S != pre {
+				partitions = append(partitions, i)
+				pre = y.S
+			}
+		}
+		partitions = append(partitions, len(ys))
+		start := 0
+		for _, end := range partitions {
+			receiver := votes[ys[start].O].Sender
+			query := make([]strfmt.UUID, end-start)
+			for j := 0; start < end; start++ {
+				query[j] = ids[ys[start].O]
+				j++
+			}
+			resp, err := f.RClient.MultiGetObjects(ctx, receiver, f.class, shard, query)
+			if err != nil {
+				return _Results{nil, err}
+			}
+			n := len(query)
+			if m := len(resp); n != m {
+				return _Results{nil, fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)}
+			}
+			for i := 0; i < n; i++ {
+				var cTime int64
+				if resp[i] != nil {
+					cTime = resp[i].LastUpdateTimeUnix()
+				}
+				idx := ys[start-n+i].O
+				if lastTimes[idx].T < cTime {
+					return _Results{nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)}
+				}
+				result[idx] = resp[i]
+			}
+		}
+
+		// preHost := votes[ys[0].S].Sender
+		// os := make([]strfmt.UUID, 0, len(ys))
+		// pre := ys[0].S
+		// for i, y := range ys {
+		// 	if y.S != pre || i == len(ys)-1 {
+		// 		os[i] = ids[y.O]
+		// 		os = os[:1]
+		// 	} else {
+		// 		os = append(os, ids[y.O])
+		// 	}
+		// }
+	}
+	return _Results{nil, nil}
 }
