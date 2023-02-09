@@ -656,7 +656,7 @@ func TestFinderExists(t *testing.T) {
 	})
 }
 
-func TestFinderGetAll(t *testing.T) {
+func TestFinderDeprecatedGetAll(t *testing.T) {
 	var (
 		id        = []strfmt.UUID{"10", "20", "30"}
 		cls       = "C1"
@@ -806,5 +806,59 @@ func TestFinderGetAll(t *testing.T) {
 		assert.Contains(t, err.Error(), fmt.Sprintf("A: %s", m))
 		assert.Contains(t, err.Error(), fmt.Sprintf("B: %s", m))
 		assert.Contains(t, err.Error(), "C: number of objects 2 != 3")
+	})
+}
+
+func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
+	var (
+		ids       = []strfmt.UUID{"10", "20", "30"}
+		cls       = "C1"
+		shard     = "SH1"
+		nodes     = []string{"A", "B", "C"}
+		ctx       = context.Background()
+		result    = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+		nilResult = []*storobj.Object(nil)
+	)
+
+	t.Run("AllButOne", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.NotNil(t, err)
+		assert.ErrorIs(t, err, errAny)
+		assert.ErrorContains(t, err, nodes[1])
+		assert.Nil(t, got)
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
 	})
 }
