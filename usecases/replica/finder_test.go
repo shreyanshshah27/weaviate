@@ -836,9 +836,9 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
-		assert.NotNil(t, err)
-		assert.ErrorIs(t, err, errAny)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, nodes[1])
+		assert.ErrorContains(t, err, err.Error())
 		assert.Nil(t, got)
 	})
 
@@ -1291,5 +1291,203 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.Equal(t, nilObjects, got)
 		assert.Contains(t, err.Error(), "conflict")
 		assert.Contains(t, err.Error(), nodes[1])
+	})
+
+	t.Run("RepairOverwriteError", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+			directR2 = []*storobj.Object{
+				object(ids[1], 3),
+			}
+			directR3 = []*storobj.Object{
+				object(ids[2], 4),
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+			Return(directR, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
+			Return(digestR2, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).
+			Return(digestR3, nil).
+			Once()
+
+		// fetch most recent objects
+		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(directR2, nil).
+			Once()
+		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(directR3, nil).
+			Once()
+		// repair
+		var (
+			repairR1 = []RepairResponse{
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+
+			repairR2 = []RepairResponse(nil)
+			repairR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+			}
+		)
+		f.RClient.On("OverwriteObjects", anyVal, nodes[0], cls, shard, anyVal).
+			Return(repairR1, nil).
+			Once()
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(repairR2, errAny).
+			Once()
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(repairR3, nil).
+			Once()
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.ErrorContains(t, err, errAny.Error())
+		assert.Equal(t, []*storobj.Object(nil), got)
+		assert.ErrorContains(t, err, nodes[1])
+	})
+
+	t.Run("RepairFetchMostRecentObjectsError", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+			directR2 = []*storobj.Object{
+				object(ids[1], 3),
+			}
+			directR3 = []*storobj.Object{
+				object(ids[2], 4),
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		// fetch most recent objects
+		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, errAny)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.ErrorContains(t, err, errAny.Error())
+		assert.Equal(t, []*storobj.Object(nil), got)
+	})
+
+	t.Run("RepairFetchMostRecentObjectsEmptyResponse", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+			directR2 = []*storobj.Object{
+				object(ids[1], 3),
+			}
+			directR3 = []*storobj.Object{}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		// fetch most recent objects
+		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.Equal(t, []*storobj.Object(nil), got)
+	})
+
+	t.Run("RepairFetchMostRecentObjectsUnexpectedResponse", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+			directR2 = []*storobj.Object{
+				object(ids[1], 3),
+			}
+			directR3 = []*storobj.Object{
+				object(ids[2], 3), // 3 instead of 4
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		// fetch most recent objects
+		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.Equal(t, []*storobj.Object(nil), got)
 	})
 }

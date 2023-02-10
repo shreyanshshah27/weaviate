@@ -325,7 +325,11 @@ func (f *Finder) GetAllV2(ctx context.Context, l ConsistencyLevel, shard string,
 		return nil, err
 	}
 	result := <-f.readAll(ctx, shard, ids, replyCh, state)
-	return result.data, result.err
+	if err = result.err; err != nil {
+		err = fmt.Errorf("%w %q: %v", ErrConsistencyLevel, state.CLevel, err)
+	}
+
+	return result.data, err
 }
 
 type vote struct {
@@ -392,9 +396,6 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 			}
 		}
 		res, err := f.repairAll(ctx, shard, ids, votes, st, contentIdx)
-		if err != nil {
-			err = fmt.Errorf("%w %q: %v", ErrConsistencyLevel, st.CLevel, err)
-		}
 		resultCh <- _Results{res, err}
 	}()
 
