@@ -861,4 +861,23 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, result, got)
 	})
+	t.Run("OneOutOfThreeObjectsExists", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{nil, object(ids[1], 2), nil}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 0},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 0},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
 }

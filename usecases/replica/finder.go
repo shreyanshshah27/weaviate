@@ -173,7 +173,7 @@ func (f *Finder) readOne(ctx context.Context, shard string, id strfmt.UUID, ch <
 		for r := range ch { // len(ch) == st.Level
 			resp := r.Response
 			if r.Err != nil { // a least one node is not responding
-				resultCh <- result[*storobj.Object]{nil, r.Err}
+				resultCh <- result[*storobj.Object]{nil, fmt.Errorf("source %s: %w", resp.sender, r.Err)}
 				return
 			}
 			if !resp.DigestRead {
@@ -308,13 +308,13 @@ func (f *Finder) GetAllV2(ctx context.Context, l ConsistencyLevel, shard string,
 	op := func(ctx context.Context, host string, fullRead bool) (batchReply, error) {
 		if fullRead {
 			xs, err := f.RClient.MultiGetObjects(ctx, host, f.class, shard, ids)
-			if m := len(xs); n != m {
+			if m := len(xs); err == nil && n != m {
 				err = fmt.Errorf("direct read expected %d got %d items", n, m)
 			}
 			return batchReply{Sender: host, DigestRead: false, DirectData: xs}, err
 		} else {
 			xs, err := f.DigestObjects(ctx, host, f.class, shard, ids)
-			if m := len(xs); n != m {
+			if m := len(xs); err == nil && n != m {
 				err = fmt.Errorf("direct read expected %d got %d items", n, m)
 			}
 			return batchReply{Sender: host, DigestRead: true, DigestData: xs}, err
@@ -335,10 +335,12 @@ type vote struct {
 }
 
 func (r batchReply) UpdateTimeAt(idx int) int64 {
-	if r.DigestData != nil {
+	if len(r.DigestData) != 0 {
 		return r.DigestData[idx].UpdateTime
+	} else if x := r.DirectData[idx]; x != nil {
+		return x.LastUpdateTimeUnix()
 	}
-	return r.DirectData[idx].LastUpdateTimeUnix()
+	return 0
 }
 
 type _Results result[[]*storobj.Object]
@@ -358,7 +360,7 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 		for r := range ch { // len(ch) == st.Level
 			resp := r.Response
 			if r.Err != nil { // a least one node is not responding
-				resultCh <- _Results{nil, r.Err}
+				resultCh <- _Results{nil, fmt.Errorf("source %s: %w", r.Response.Sender, r.Err)}
 				return
 			}
 			if !resp.DigestRead {
@@ -401,9 +403,12 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 		O int
 		T int64
 	}
+	var (
+		result    = make([]*storobj.Object, len(ids)) // final result
+		lastTimes = make([]iTuple, len(ids))          // most recent times
+		ms        = make([]iTuple, 0, len(ids))       // mismatches
 
-	result := make([]*storobj.Object, len(ids))
-	lastTimes := make([]iTuple, len(ids))
+	)
 	// find most recent objects
 	for i, x := range votes[contentIdx].DirectData {
 		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.LastUpdateTimeUnix()}
@@ -418,7 +423,6 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 		}
 	}
 	// find missing content
-	ms := make([]iTuple, 0, len(ids)) // mismatches
 	for i, p := range votes[contentIdx].DirectData {
 		if contentIdx != lastTimes[i].S {
 			ms = append(ms, lastTimes[i])
