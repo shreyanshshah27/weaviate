@@ -444,7 +444,7 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 		partitions = append(partitions, len(ms))
 		start := 0
 		for _, end := range partitions { // fetch diffs
-			receiver := votes[ms[start].O].Sender
+			receiver := votes[ms[start].S].Sender
 			query := make([]strfmt.UUID, end-start)
 			for j := 0; start < end; start++ {
 				query[j] = ids[ms[start].O]
