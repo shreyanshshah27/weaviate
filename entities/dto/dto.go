@@ -35,6 +35,13 @@ type GetParams struct {
 	HybridSearch         *searchparams.HybridSearch
 	SearchVector         []float32
 	Group                *GroupParams
+	GroupBy              *GroupByParams
 	ModuleParams         map[string]interface{}
 	AdditionalProperties additional.Properties
+}
+
+type GroupByParams struct {
+	Prop            string
+	ObjectsPerGroup int
+	GroupsLimit     int
 }
