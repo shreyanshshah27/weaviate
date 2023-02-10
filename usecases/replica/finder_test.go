@@ -817,7 +817,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		nodes = []string{"A", "B", "C"}
 		ctx   = context.Background()
 		// result    = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
-		// nilResult = []*storobj.Object(nil)
+		nilObjects = []*storobj.Object(nil)
 	)
 
 	t.Run("AllButOne", func(t *testing.T) {
@@ -942,7 +942,135 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.Equal(t, result, got)
 	})
 
-	t.Run("RepairDigestRead", func(t *testing.T) {
+	t.Run("RepairDirectRead3", func(t *testing.T) {
+		var (
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+			ids    = []strfmt.UUID{"1", "2", "3"}
+			result = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 3),
+				object(ids[2], 4), // latest
+
+			}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+			directR2 = []*storobj.Object{
+				object(ids[1], 3),
+			}
+			directR3 = []*storobj.Object{
+				object(ids[2], 4),
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		// fetch most recent objects
+		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]strfmt.UUID)
+			assert.ElementsMatch(t, ids[1:2], got)
+		}
+		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]strfmt.UUID)
+			assert.ElementsMatch(t, ids[2:], got)
+		}
+
+		// repair
+		var (
+			repairR1 = []RepairResponse{
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+
+			repairR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			repairR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+			}
+		)
+		f.RClient.On("OverwriteObjects", anyVal, nodes[0], cls, shard, anyVal).
+			Return(repairR1, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[1].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 1,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(repairR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[0].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 1,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(repairR3, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[0].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[1].Object,
+					StaleUpdateTime: 1,
+				},
+			}
+			assert.ElementsMatch(t, want, got)
+		}
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
+
+	t.Run("RepairDigestRead6", func(t *testing.T) {
 		var (
 			f      = newFakeFactory("C1", shard, nodes)
 			finder = f.newFinder()
@@ -987,7 +1115,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
-		
+
 		// fetch most recent objects
 		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
 			Once().
@@ -1003,8 +1131,26 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		}
 
 		// repair
+		var (
+			overwriteR1 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 2},
+				{ID: ids[4].String(), UpdateTime: 2},
+			}
+			overwriteR2 = []RepairResponse{
+				{ID: ids[2].String(), UpdateTime: 1},
+				{ID: ids[3].String(), UpdateTime: 1},
+				{ID: ids[4].String(), UpdateTime: 1},
+			}
+			overwriteR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[3].String(), UpdateTime: 1},
+			}
+		)
 		f.RClient.On("OverwriteObjects", anyVal, nodes[0], cls, shard, anyVal).
-			Return(digestR2, nil).
+			Return(overwriteR1, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]*objects.VObject)
@@ -1031,7 +1177,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		}
 
 		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
-			Return(digestR2, nil).
+			Return(overwriteR2, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]*objects.VObject)
@@ -1053,7 +1199,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
-			Return(digestR2, nil).
+			Return(overwriteR3, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]*objects.VObject)
@@ -1077,5 +1223,73 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, result, got)
+	})
+
+	t.Run("RepairChangedObject", func(t *testing.T) {
+		var (
+			f        = newFakeFactory("C1", shard, nodes)
+			finder   = f.newFinder()
+			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 4},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 5},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+			digestR4 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 4},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 1, Err: "conflict"}, // this one
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(digestR4, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[1].Object,
+					StaleUpdateTime: 2,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 3,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(digestR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[0].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 3,
+				},
+			}
+			assert.ElementsMatch(t, want, got)
+		}
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.Equal(t, nilObjects, got)
+		assert.Contains(t, err.Error(), "conflict")
+		assert.Contains(t, err.Error(), nodes[1])
 	})
 }

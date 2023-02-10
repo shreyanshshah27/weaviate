@@ -391,13 +391,23 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 				return
 			}
 		}
-		resultCh <- f.repairAll(ctx, shard, ids, votes, st, contentIdx)
+		res, err := f.repairAll(ctx, shard, ids, votes, st, contentIdx)
+		if err != nil {
+			err = fmt.Errorf("%w %q: %v", ErrConsistencyLevel, st.CLevel, err)
+		}
+		resultCh <- _Results{res, err}
 	}()
 
 	return resultCh
 }
 
-func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID, votes []vote, st rState, contentIdx int) _Results {
+func (f *Finder) repairAll(ctx context.Context,
+	shard string,
+	ids []strfmt.UUID,
+	votes []vote,
+	st rState,
+	contentIdx int,
+) ([]*storobj.Object, error) {
 	type iTuple struct {
 		S int
 		O int
@@ -442,6 +452,7 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 			}
 		}
 		partitions = append(partitions, len(ms))
+		//
 		start := 0
 		for _, end := range partitions { // fetch diffs
 			receiver := votes[ms[start].S].Sender
@@ -452,11 +463,11 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 			}
 			resp, err := f.RClient.MultiGetObjects(ctx, receiver, f.class, shard, query)
 			if err != nil {
-				return _Results{nil, err}
+				return nil, err
 			}
 			n := len(query)
 			if m := len(resp); n != m {
-				return _Results{nil, fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)}
+				return nil, fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)
 			}
 			for i := 0; i < n; i++ {
 				var cTime int64
@@ -465,7 +476,7 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 				}
 				idx := ms[start-n+i].O
 				if lastTimes[idx].T != cTime {
-					return _Results{nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)}
+					return nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)
 				}
 				result[idx] = resp[i]
 			}
@@ -485,16 +496,14 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 		}
 		rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
 		if err != nil {
-			// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
-			return _Results{nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)}
+			return nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)
 		}
 		for _, r := range rs {
 			if r.Err != "" {
-				return _Results{nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)}
+				return nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)
 			}
 		}
-
 	}
 
-	return _Results{result, nil}
+	return result, nil
 }
