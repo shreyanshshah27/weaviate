@@ -880,4 +880,65 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, result, got)
 	})
+
+	t.Run("RepairDirectRead", func(t *testing.T) {
+		var (
+			f        = newFakeFactory("C1", shard, nodes)
+			finder   = f.newFinder()
+			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 4},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 5},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(digestR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[1].Object,
+					StaleUpdateTime: 2,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 3,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(digestR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[0].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 3,
+				},
+			}
+			assert.ElementsMatch(t, want, got)
+		}
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
 }

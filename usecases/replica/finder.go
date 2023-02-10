@@ -470,31 +470,31 @@ func (f *Finder) repairAll(ctx context.Context, shard string, ids []strfmt.UUID,
 				result[idx] = resp[i]
 			}
 		}
-		// repair
-		for _, vote := range votes {
-			receiver := vote.Sender
-			query := make([]*objects.VObject, 0, len(ids))
-			for j, x := range lastTimes {
-				if cTime := vote.UpdateTimeAt(j); x.T != cTime {
-					query = append(query, &objects.VObject{LatestObject: &result[j].Object, StaleUpdateTime: cTime})
-				}
+	}
+	// repair
+	for _, vote := range votes {
+		receiver := vote.Sender
+		query := make([]*objects.VObject, 0, len(ids))
+		for j, x := range lastTimes {
+			if cTime := vote.UpdateTimeAt(j); x.T != cTime {
+				query = append(query, &objects.VObject{LatestObject: &result[j].Object, StaleUpdateTime: cTime})
 			}
-			if len(query) == 0 {
-				break
+		}
+		if len(query) == 0 {
+			continue
+		}
+		rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
+		if err != nil {
+			// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
+			return _Results{nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)}
+		}
+		for _, r := range rs {
+			if r.Err != "" {
+				return _Results{nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)}
 			}
-			rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
-			if err != nil {
-				// fmt.Printf("repair-1: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, winner.sender, winner.UTime, c.UTime)
-				return _Results{nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)}
-			}
-			for _, r := range rs {
-				if r.Err != "" {
-					return _Results{nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)}
-				}
-			}
-
 		}
 
 	}
+
 	return _Results{result, nil}
 }
