@@ -179,9 +179,12 @@ func (c *coordinator[T]) Fetch2(ctx context.Context, cl ConsistencyLevel, op rea
 				defer wg.Done()
 				resp, err := op(ctx, candidates[idx], idx == 0)
 				// If node is not responding delegate request to another node
-				if err != nil {
+
+				for err != nil {
 					if delegate, ok := <-candidatePool; ok {
 						resp, err = op(ctx, delegate, idx == 0)
+					}else{
+						break
 					}
 				}
 				replyCh <- simpleResult[T]{resp, err}

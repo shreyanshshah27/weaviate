@@ -409,16 +409,10 @@ func (f *Finder) repairAll(ctx context.Context,
 	st rState,
 	contentIdx int,
 ) ([]*storobj.Object, error) {
-	type iTuple struct {
-		S int
-		O int
-		T int64
-	}
 	var (
 		result    = make([]*storobj.Object, len(ids)) // final result
 		lastTimes = make([]iTuple, len(ids))          // most recent times
 		ms        = make([]iTuple, 0, len(ids))       // mismatches
-
 	)
 	// find most recent objects
 	for i, x := range votes[contentIdx].DirectData {
@@ -433,7 +427,7 @@ func (f *Finder) repairAll(ctx context.Context,
 			}
 		}
 	}
-	// find missing content
+	// find missing content (diff)
 	for i, p := range votes[contentIdx].DirectData {
 		if contentIdx != lastTimes[i].S {
 			ms = append(ms, lastTimes[i])
@@ -483,6 +477,7 @@ func (f *Finder) repairAll(ctx context.Context,
 			}
 		}
 	}
+
 	// repair
 	for _, vote := range votes {
 		receiver := vote.Sender
@@ -508,3 +503,12 @@ func (f *Finder) repairAll(ctx context.Context,
 
 	return result, nil
 }
+
+// iTuple tuple of indices used to identify a unique object
+type iTuple struct {
+	S int   // sender's index
+	O int   // object's index
+	T int64 // last update time
+}
+
+
