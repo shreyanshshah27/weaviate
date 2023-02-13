@@ -1490,4 +1490,79 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.Equal(t, []*storobj.Object(nil), got)
 	})
+
+	t.Run("DirectReadReturnsLessResults", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{ // has 2 instead of 3 objects
+				object(ids[0], 2),
+				// object(ids[1], 1),
+				object(ids[2], 1),
+			}
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+			Return(directR, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
+			Return(digestR2, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).
+			Return(digestR3, nil).
+			Once()
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.NotNil(t, err)
+		assert.Equal(t, []*storobj.Object(nil), got)
+		assert.ErrorContains(t, err, nodes[0])
+	})
+
+	t.Run("DigestReadReturnLessResults", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			ids     = []strfmt.UUID{"1", "2", "3"}
+			directR = []*storobj.Object{
+				object(ids[0], 2),
+				object(ids[1], 1),
+				object(ids[2], 1),
+			}
+			digestR2 = []RepairResponse{ // has 2 instead of 3 objects
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 3}, // latest
+				//{ID: ids[2].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 4}, // latest
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+			Return(directR, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
+			Return(digestR2, nil).
+			Once()
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).
+			Return(digestR3, nil).
+			Once()
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.NotNil(t, err)
+		assert.Equal(t, []*storobj.Object(nil), got)
+		assert.ErrorContains(t, err, nodes[0])
+	})
+
 }
