@@ -1564,5 +1564,118 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.Equal(t, []*storobj.Object(nil), got)
 		assert.ErrorContains(t, err, nodes[0])
 	})
+}
 
+func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
+	var (
+		ids   = []strfmt.UUID{"10", "20", "30"}
+		cls   = "C1"
+		shard = "SH1"
+		nodes = []string{"A", "B", "C"}
+		ctx   = context.Background()
+		// nilObjects = []*storobj.Object(nil)
+	)
+
+	t.Run("AllButOne", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
+
+		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.ErrorContains(t, err, err.Error())
+		assert.Nil(t, got)
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
+
+		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
+
+	t.Run("OneOutOfThreeObjectsExists", func(t *testing.T) {
+		var (
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			result  = []*storobj.Object{nil, object(ids[1], 2), nil}
+			digestR = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 0},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 0},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
+
+		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
+
+	t.Run("RepairDirectRead", func(t *testing.T) {
+		var (
+			f        = newFakeFactory("C1", shard, nodes)
+			finder   = f.newFinder()
+			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 4},
+				{ID: ids[1].String(), UpdateTime: 2},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 5},
+				{ID: ids[2].String(), UpdateTime: 3},
+			}
+		)
+		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, errAny)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(digestR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[0].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[2].Object,
+					StaleUpdateTime: 3,
+				},
+			}
+			assert.ElementsMatch(t, want, got)
+		}
+
+		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		assert.Nil(t, err)
+		assert.Equal(t, result, got)
+	})
 }
