@@ -37,7 +37,7 @@ type (
 		UpdateTime int64  // sender's current update time
 		DigestRead bool
 	}
-	findOneReply    senderReply[*storobj.Object]
+	findOneReply    senderReply[objects.Replica]
 	existReply      senderReply[bool]
 	getObjectsReply senderReply[[]*storobj.Object]
 )
@@ -66,35 +66,18 @@ func NewFinder(className string,
 }
 
 // GetOne gets object which satisfies the giving consistency
-func (f *Finder) GetOne(ctx context.Context, l ConsistencyLevel, shard string,
-	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
-) (*storobj.Object, error) {
-	c := newReadCoordinator[findOneReply](f, shard)
-	op := func(ctx context.Context, host string) (findOneReply, error) {
-		obj, err := f.FindObject(ctx, host, f.class, shard, id, props, additional)
-		return findOneReply{host, -1, obj, 0, false}, err
-	}
-	replyCh, state, err := c.Fetch(ctx, l, op)
-	if err != nil {
-		return nil, err
-	}
-	result := <-readOne(replyCh, state)
-	return result.data, result.err
-}
-
-// GetOne gets object which satisfies the giving consistency
 func (f *Finder) GetOneV2(ctx context.Context, l ConsistencyLevel, shard string,
 	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
 ) (*storobj.Object, error) {
 	c := newReadCoordinator[findOneReply](f, shard)
 	op := func(ctx context.Context, host string, fullRead bool) (findOneReply, error) {
 		if fullRead {
-			obj, err := f.FindObject(ctx, host, f.class, shard, id, props, additional)
+			r, err := f.FetchObject(ctx, host, f.class, shard, id, props, additional)
 			var uTime int64
-			if obj != nil {
-				uTime = obj.LastUpdateTimeUnix()
+			if r.Object != nil {
+				uTime = r.Object.LastUpdateTimeUnix()
 			}
-			return findOneReply{host, -1, obj, uTime, false}, err
+			return findOneReply{host, -1, r, uTime, false}, err
 		} else {
 			xs, err := f.DigestObjects(ctx, host, f.class, shard, []strfmt.UUID{id})
 			var x RepairResponse
@@ -104,7 +87,7 @@ func (f *Finder) GetOneV2(ctx context.Context, l ConsistencyLevel, shard string,
 			if err == nil && len(xs) != 1 {
 				err = fmt.Errorf("digest read request: empty result")
 			}
-			return findOneReply{host, x.Version, nil, x.UpdateTime, true}, err
+			return findOneReply{host, x.Version, objects.Replica{}, x.UpdateTime, true}, err
 		}
 	}
 	replyCh, state, err := c.Fetch2(ctx, l, op)
@@ -154,7 +137,8 @@ func (f *Finder) NodeObject(ctx context.Context, nodeName, shard string,
 	if !ok || host == "" {
 		return nil, fmt.Errorf("cannot resolve node name: %s", nodeName)
 	}
-	return f.RClient.FindObject(ctx, host, f.class, shard, id, props, additional)
+	r, err := f.RClient.FetchObject(ctx, host, f.class, shard, id, props, additional)
+	return r.Object, err
 }
 
 func (f *Finder) readOne(ctx context.Context, shard string, id strfmt.UUID, ch <-chan simpleResult[findOneReply], st rState) <-chan result[*storobj.Object] {
@@ -191,7 +175,7 @@ func (f *Finder) readOne(ctx context.Context, shard string, id strfmt.UUID, ch <
 				}
 				if max >= st.Level && contentIdx >= 0 { //} !resultSent && max >= st.Level && contentIdx >= 0 {
 					// resultSent = true
-					resultCh <- result[*storobj.Object]{counters[contentIdx].o, nil}
+					resultCh <- result[*storobj.Object]{counters[contentIdx].o.Object, nil}
 					return
 				}
 			}
@@ -243,15 +227,15 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 
 	updates := counters[contentIdx].o
 	winner := counters[winnerIdx]
-	if updates.LastUpdateTimeUnix() != lastUTime {
-		updates, err = f.RClient.FindObject(ctx, winner.sender, f.class, shard, id,
+	if updates.Object.LastUpdateTimeUnix() != lastUTime {
+		updates, err = f.RClient.FetchObject(ctx, winner.sender, f.class, shard, id,
 			search.SelectProperties{}, additional.Properties{})
 		if err != nil {
 			return nil, fmt.Errorf("get most recent object from %s: %w", counters[winnerIdx].sender, err)
 		}
 	}
 
-	isNewObject := lastUTime == updates.CreationTimeUnix()
+	isNewObject := lastUTime == updates.Object.CreationTimeUnix()
 	for _, x := range counters {
 		if x.UTime == 0 && !isNewObject {
 			return nil, fmt.Errorf("conflict: object might have been deleted on node %q", x.sender)
@@ -265,7 +249,7 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 	for _, c := range counters {
 		if c.UTime != lastUTime {
 			updates := []*objects.VObject{{
-				LatestObject:    &updates.Object,
+				LatestObject:    &updates.Object.Object,
 				StaleUpdateTime: c.UTime,
 				Version:         0, // todo set when implemented
 			}}
@@ -283,7 +267,7 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 			// overwrite(ctx, c.sender, winner)
 		}
 	}
-	return updates, nil
+	return updates.Object, nil
 }
 
 // batchReply represents the data returned by sender
@@ -510,5 +494,3 @@ type iTuple struct {
 	O int   // object's index
 	T int64 // last update time
 }
-
-

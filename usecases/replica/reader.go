@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 type result[T any] struct {
@@ -31,90 +32,7 @@ type tuple[T any] struct {
 	err    error
 }
 
-type objTuple tuple[*storobj.Object]
-
-func readOne(ch <-chan simpleResult[findOneReply], st rState) <-chan result[*storobj.Object] {
-	// counters tracks the number of votes
-	counters := make([]objTuple, 0, len(st.Hosts))
-	resultCh := make(chan result[*storobj.Object], 1)
-	resultSent := false
-	var max int
-	go func() {
-		var winner int
-		defer close(resultCh)
-		for r := range ch {
-			resp := r.Response
-			if r.Err != nil {
-				counters = append(counters, objTuple{resp.sender, 0, nil, 0, r.Err})
-				continue
-			}
-			counters = append(counters, objTuple{resp.sender, 0, resp.Data, 0, nil})
-			max = 0
-			for i := range counters {
-				if compare(counters[i].o, resp.Data) == 0 {
-					counters[i].ack++
-				}
-				if max < counters[i].ack {
-					max = counters[i].ack
-					winner = i
-				}
-				if !resultSent && max >= st.Level {
-					resultSent = true
-					resultCh <- result[*storobj.Object]{counters[i].o, nil}
-				}
-			}
-		}
-		if resultSent && max < cLevel(All, st.Len()) {
-			repairOne(counters, st, winner)
-		}
-		if !resultSent {
-			var sb strings.Builder
-			for i, c := range counters {
-				if i != 0 {
-					sb.WriteString(", ")
-				}
-				if c.err != nil {
-					fmt.Fprintf(&sb, "%s: %s", c.sender, c.err.Error())
-				} else if c.o == nil {
-					fmt.Fprintf(&sb, "%s: 0", c.sender)
-				} else {
-					fmt.Fprintf(&sb, "%s: %d", c.sender, c.o.LastUpdateTimeUnix())
-				}
-			}
-			resultCh <- result[*storobj.Object]{nil, fmt.Errorf("%w %q %s", ErrConsistencyLevel, st.CLevel, sb.String())}
-		}
-	}()
-	return resultCh
-}
-
-func repairOne(counters []objTuple, st rState, winnerIdx int) {
-	// TODO: if winner object is nil we need to tell the node to delete the object
-	// The adapter/repos/db/DB.overwriteObjects nil to be adjust to account for nil objects
-	vots := counters[winnerIdx].ack
-	winner := counters[winnerIdx].o
-
-	if vots < cLevel(Quorum, st.Len()) {
-		return
-	}
-
-	for _, c := range counters {
-		if compare(winner, c.o) != 0 {
-			if c.o != nil {
-				previousTime := int64(0)
-				if c.o != nil {
-					previousTime = c.o.LastUpdateTimeUnix()
-				}
-				wName := counters[winnerIdx].sender
-				wTime := int64(0)
-				if winner != nil {
-					wTime = winner.LastUpdateTimeUnix()
-				}
-				fmt.Printf("repair: receiver:%s winner:%s winnerTime %d receiverTime %d\n", c.sender, wName, wTime, previousTime)
-				// overwrite(ctx, c.sender, winner)
-			}
-		}
-	}
-}
+type objTuple tuple[objects.Replica]
 
 type boolTuple tuple[bool]
 

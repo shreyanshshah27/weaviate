@@ -27,12 +27,12 @@ type fakeRClient struct {
 	mock.Mock
 }
 
-func (f *fakeRClient) FindObject(ctx context.Context, host, index, shard string,
+func (f *fakeRClient) FetchObject(ctx context.Context, host, index, shard string,
 	id strfmt.UUID, props search.SelectProperties,
 	additional additional.Properties,
-) (*storobj.Object, error) {
+) (objects.Replica, error) {
 	args := f.Called(ctx, host, index, shard, id, props, additional)
-	return args.Get(0).(*storobj.Object), args.Error(1)
+	return args.Get(0).(objects.Replica), args.Error(1)
 }
 
 func (f *fakeRClient) Exists(ctx context.Context, host, index, shard string, id strfmt.UUID) (bool, error) {
@@ -55,7 +55,8 @@ func (f *fakeRClient) OverwriteObjects(ctx context.Context, host, index, shard s
 }
 
 func (f *fakeRClient) DigestObjects(ctx context.Context, host, index, shard string,
-	ids []strfmt.UUID,) ([]RepairResponse, error) {
+	ids []strfmt.UUID,
+) ([]RepairResponse, error) {
 	args := f.Called(ctx, host, index, shard, ids)
 	return args.Get(0).([]RepairResponse), args.Error(1)
 }

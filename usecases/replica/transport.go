@@ -157,9 +157,9 @@ type Client interface {
 
 // RClient is the client used to read from remote replicas
 type RClient interface {
-	FindObject(_ context.Context, host, index, shard string,
+	FetchObject(_ context.Context, host, index, shard string,
 		id strfmt.UUID, props search.SelectProperties,
-		additional additional.Properties) (*storobj.Object, error)
+		additional additional.Properties) (objects.Replica, error)
 
 	Exists(_ context.Context, host, index, shard string, id strfmt.UUID) (bool, error)
 
