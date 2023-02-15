@@ -119,22 +119,6 @@ func (f *Finder) Exists(ctx context.Context, l ConsistencyLevel, shard string, i
 	return readOneExists(replyCh, state)
 }
 
-// GetAll gets all objects which satisfy the giving consistency
-func (f *Finder) GetAll(ctx context.Context, l ConsistencyLevel, shard string,
-	ids []strfmt.UUID,
-) ([]*storobj.Object, error) {
-	c := newReadCoordinator[getObjectsReply](f, shard)
-	op := func(ctx context.Context, host string) (getObjectsReply, error) {
-		objs, err := f.RClient.MultiGetObjects(ctx, host, f.class, shard, ids)
-		return getObjectsReply{host, -1, objs, 0, false}, err
-	}
-	replyCh, state, err := c.Fetch(ctx, l, op)
-	if err != nil {
-		return nil, err
-	}
-	return readAll(replyCh, len(ids), state)
-}
-
 // NodeObject gets object from a specific node.
 // it is used mainly for debugging purposes
 func (f *Finder) NodeObject(ctx context.Context, nodeName, shard string,
@@ -282,7 +266,7 @@ type batchReply struct {
 	// DigestRead is this reply from digest read?
 	DigestRead bool
 	// DirectData returned from a direct read request
-	DirectData []*storobj.Object
+	DirectData []objects.Replica
 	// DigestData returned from a digest read request
 	DigestData []RepairResponse
 }
@@ -295,7 +279,7 @@ func (f *Finder) GetAllV2(ctx context.Context, l ConsistencyLevel, shard string,
 	n := len(ids)
 	op := func(ctx context.Context, host string, fullRead bool) (batchReply, error) {
 		if fullRead {
-			xs, err := f.RClient.MultiGetObjects(ctx, host, f.class, shard, ids)
+			xs, err := f.RClient.FetchObjects(ctx, host, f.class, shard, ids)
 			if m := len(xs); err == nil && n != m {
 				err = fmt.Errorf("direct read expected %d got %d items", n, m)
 			}
@@ -329,10 +313,12 @@ type vote struct {
 func (r batchReply) UpdateTimeAt(idx int) int64 {
 	if len(r.DigestData) != 0 {
 		return r.DigestData[idx].UpdateTime
-	} else if x := r.DirectData[idx]; x != nil {
-		return x.LastUpdateTimeUnix()
 	}
-	return 0
+	return r.DirectData[idx].UpdateTime()
+	// else if x := r.DirectData[idx]; x != nil {
+	// 	return x.LastUpdateTimeUnix()
+	// }
+	// return 0
 }
 
 type _Results result[[]*storobj.Object]
@@ -379,7 +365,7 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 			}
 
 			if M == N {
-				resultCh <- _Results{votes[contentIdx].DirectData, nil}
+				resultCh <- _Results{fromReplicas(votes[contentIdx].DirectData), nil}
 				return
 			}
 		}
@@ -404,7 +390,7 @@ func (f *Finder) repairAll(ctx context.Context,
 	)
 	// find most recent objects
 	for i, x := range votes[contentIdx].DirectData {
-		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.LastUpdateTimeUnix()}
+		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.UpdateTime()}
 	}
 	for i, vote := range votes {
 		if i != contentIdx {
@@ -420,7 +406,7 @@ func (f *Finder) repairAll(ctx context.Context,
 		if contentIdx != lastTimes[i].S {
 			ms = append(ms, lastTimes[i])
 		} else {
-			result[i] = p
+			result[i] = p.Object
 		}
 	}
 	if len(ms) > 0 { // fetch most recent objects
@@ -444,7 +430,7 @@ func (f *Finder) repairAll(ctx context.Context,
 				query[j] = ids[ms[start].O]
 				j++
 			}
-			resp, err := f.RClient.MultiGetObjects(ctx, receiver, f.class, shard, query)
+			resp, err := f.RClient.FetchObjects(ctx, receiver, f.class, shard, query)
 			if err != nil {
 				return nil, err
 			}
@@ -453,15 +439,11 @@ func (f *Finder) repairAll(ctx context.Context,
 				return nil, fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)
 			}
 			for i := 0; i < n; i++ {
-				var cTime int64
-				if resp[i] != nil {
-					cTime = resp[i].LastUpdateTimeUnix()
-				}
 				idx := ms[start-n+i].O
-				if lastTimes[idx].T != cTime {
+				if lastTimes[idx].T != resp[i].UpdateTime() {
 					return nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)
 				}
-				result[idx] = resp[i]
+				result[idx] = resp[i].Object
 			}
 		}
 	}

@@ -558,159 +558,6 @@ func TestFinderExists(t *testing.T) {
 	})
 }
 
-func TestFinderDeprecatedGetAll(t *testing.T) {
-	var (
-		id        = []strfmt.UUID{"10", "20", "30"}
-		cls       = "C1"
-		shard     = "SH1"
-		nodes     = []string{"A", "B", "C"}
-		ctx       = context.Background()
-		result    = []*storobj.Object{object(id[0], 1), object(id[1], 2), object(id[2], 3)}
-		nilResult = []*storobj.Object(nil)
-	)
-
-	t.Run("All", func(t *testing.T) {
-		result := []*storobj.Object{object(id[0], 1), object(id[1], 2), object(id[2], 3)}
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(result, nil)
-		}
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, result, got)
-	})
-
-	t.Run("AllSameID", func(t *testing.T) {
-		expected := []*storobj.Object{object(id[0], 3), object(id[1], 3), object(id[2], 3)}
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(expected, nil)
-		}
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, expected, got)
-	})
-	t.Run("AllWithNonExistingObject", func(t *testing.T) {
-		expected := []*storobj.Object{nil, object(id[1], 1), nil}
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(expected, nil)
-		}
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, expected, got)
-	})
-
-	t.Run("AllButLastOne", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes[:len(nodes)-1] {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(result, nil)
-		}
-		result2 := []*storobj.Object{object(id[0], 2), object(id[1], 2), object(id[2], 3)}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[len(nodes)-1], cls, shard, id).Return(result2, nil)
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.NotNil(t, err)
-		assert.ErrorIs(t, err, ErrConsistencyLevel)
-		assert.Nil(t, got)
-	})
-
-	t.Run("AllButFirstOne", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes[1:] {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(result, nil)
-		}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, id).Return(make([]*storobj.Object, 3), nil)
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.NotNil(t, err)
-		assert.ErrorIs(t, err, ErrConsistencyLevel)
-		assert.Nil(t, got)
-	})
-	t.Run("Quorum", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes[1:] {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(result, nil)
-		}
-		result2 := []*storobj.Object{object(id[0], 2), object(id[1], 2), object(id[2], 3)}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, id).Return(result2, nil)
-		got, err := finder.GetAll(ctx, Quorum, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, result, got)
-	})
-	t.Run("NoQuorum", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		result = []*storobj.Object{object(id[0], 1), object(id[1], 2), object(id[2], 3)}
-		result2 := []*storobj.Object{object(id[0], 2), object(id[1], 3), object(id[2], 3)}
-		result3 := []*storobj.Object{object(id[0], 2), nil, object(id[2], 3)}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, id).Return(result, nil)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, id).Return(result2, nil)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, id).Return(result3, nil)
-		got, err := finder.GetAll(ctx, Quorum, shard, id)
-		assert.NotNil(t, err)
-		assert.ErrorIs(t, err, ErrConsistencyLevel)
-		assert.Nil(t, got)
-	})
-	t.Run("FirstOne", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, id).Return(result, nil)
-		result2 := make([]*storobj.Object, 3)
-		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(result2, nil).After(time.Second)
-		}
-		got, err := finder.GetAll(ctx, One, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, result, got)
-	})
-
-	t.Run("LastOne", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		for _, n := range nodes[:len(nodes)-1] {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(nilResult, errAny).After(time.Second)
-		}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[len(nodes)-1], cls, shard, id).Return(result, nil)
-		got, err := finder.GetAll(ctx, One, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, result, got)
-	})
-
-	t.Run("NotFound", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-		expected := make([]*storobj.Object, 3)
-		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, id).Return(expected, nil)
-		}
-		got, err := finder.GetAll(ctx, All, shard, id)
-		assert.Nil(t, err)
-		assert.Equal(t, expected, got)
-	})
-	t.Run("Failure", func(t *testing.T) {
-		f := newFakeFactory("C1", shard, nodes)
-		finder := f.newFinder()
-
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, id).Return(nilResult, errAny)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, id).Return(nilResult, errAny)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, id).Return(result[:2], nil)
-
-		got, err := finder.GetAll(ctx, One, shard, id)
-		assert.NotNil(t, err)
-		assert.Nil(t, got)
-		assert.ErrorIs(t, err, ErrConsistencyLevel)
-		m := errAny.Error()
-		assert.Contains(t, err.Error(), fmt.Sprintf("A: %s", m))
-		assert.Contains(t, err.Error(), fmt.Sprintf("B: %s", m))
-		assert.Contains(t, err.Error(), "C: number of objects 2 != 3")
-	})
-}
-
 func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 	var (
 		ids   = []strfmt.UUID{"10", "20", "30"}
@@ -733,7 +580,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
@@ -755,7 +602,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
@@ -774,7 +621,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 0},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
@@ -799,7 +646,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
@@ -878,18 +725,18 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[2], 4),
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]strfmt.UUID)
 			assert.ElementsMatch(t, ids[1:2], got)
 		}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]strfmt.UUID)
@@ -1014,18 +861,18 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[4], 3),
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]strfmt.UUID)
 			assert.ElementsMatch(t, ids[:2], got)
 		}
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
 			Once().
 			RunFn = func(a mock.Arguments) {
 			got := a[4].([]strfmt.UUID)
@@ -1148,7 +995,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 1, Err: "conflict"}, // this one
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
@@ -1223,7 +1070,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[2], 4),
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).
 			Return(directR, nil).
 			Once()
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
@@ -1234,10 +1081,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			Once()
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).
 			Return(directR2, nil).
 			Once()
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).
 			Return(directR3, nil).
 			Once()
 		// repair
@@ -1299,13 +1146,13 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[2], 4),
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, errAny)
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, errAny)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
@@ -1339,13 +1186,13 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			}
 			directR3 = []*storobj.Object{}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
@@ -1380,13 +1227,13 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[2], 3), // 3 instead of 4
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
 		// fetch most recent objects
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
@@ -1414,7 +1261,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).
 			Return(directR, nil).
 			Once()
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
@@ -1451,7 +1298,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).
 			Return(directR, nil).
 			Once()
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).
@@ -1489,7 +1336,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
@@ -1510,7 +1357,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
@@ -1530,7 +1377,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 0},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
@@ -1555,7 +1402,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
@@ -1598,7 +1445,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 			finder = f.newFinder()
 		)
 		for _, n := range nodes {
-			f.RClient.On("MultiGetObjects", anyVal, n, cls, shard, ids).Return(nilObjects, errAny)
+			f.RClient.On("FetchObjects", anyVal, n, cls, shard, ids).Return(nilObjects, errAny)
 		}
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
@@ -1613,7 +1460,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 			finder = f.newFinder()
 			result = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
 		assert.Nil(t, err)
@@ -1626,8 +1473,8 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 			finder = f.newFinder()
 			result = []*storobj.Object{nil, object(ids[1], 2), nil}
 		)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[0], cls, shard, ids).Return(result, errAny)
-		f.RClient.On("MultiGetObjects", anyVal, nodes[1], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, errAny)
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, ids).Return(result, nil)
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
 		assert.Nil(t, err)

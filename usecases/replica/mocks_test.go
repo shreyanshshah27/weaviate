@@ -40,11 +40,11 @@ func (f *fakeRClient) Exists(ctx context.Context, host, index, shard string, id 
 	return args.Get(0).(bool), args.Error(1)
 }
 
-func (f *fakeRClient) MultiGetObjects(ctx context.Context, host, index,
+func (f *fakeRClient) FetchObjects(ctx context.Context, host, index,
 	shard string, ids []strfmt.UUID,
-) ([]*storobj.Object, error) {
+) ([]objects.Replica, error) {
 	args := f.Called(ctx, host, index, shard, ids)
-	return args.Get(0).([]*storobj.Object), args.Error(1)
+	return args.Get(0).([]objects.Replica), args.Error(1)
 }
 
 func (f *fakeRClient) OverwriteObjects(ctx context.Context, host, index, shard string,

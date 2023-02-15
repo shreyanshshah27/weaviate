@@ -163,8 +163,8 @@ type RClient interface {
 
 	Exists(_ context.Context, host, index, shard string, id strfmt.UUID) (bool, error)
 
-	MultiGetObjects(_ context.Context, host, index, shard string,
-		ids []strfmt.UUID) ([]*storobj.Object, error)
+	FetchObjects(_ context.Context, host, index, shard string,
+		ids []strfmt.UUID) ([]objects.Replica, error)
 
 	OverwriteObjects(_ context.Context, host, index, shard string,
 		_ []*objects.VObject) ([]RepairResponse, error)
@@ -179,6 +179,14 @@ type RepairResponse struct {
 	UpdateTime int64  // sender's current update time
 	Err        string
 	Deleted    bool
+}
+
+func fromReplicas(xs []objects.Replica) []*storobj.Object {
+	rs := make([]*storobj.Object, len(xs))
+	for i := range xs {
+		rs[i] = xs[i].Object
+	}
+	return rs
 }
 
 // Ticket: Extend adapter/client with retry strategy for exists() and getobjects()
