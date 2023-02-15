@@ -80,6 +80,22 @@ func object(id strfmt.UUID, lastTime int64) *storobj.Object {
 	}
 }
 
+func replica(id strfmt.UUID, lastTime int64, deleted bool) objects.Replica {
+	x := objects.Replica{
+		Deleted: deleted,
+		Object: &storobj.Object{
+			Object: models.Object{
+				ID:                 id,
+				LastUpdateTimeUnix: lastTime,
+			},
+		},
+	}
+	if !x.Deleted {
+		x.ID = id
+	}
+	return x
+}
+
 func TestFinderGetOneWithConsistencyLevelALL(t *testing.T) {
 	var (
 		id        = strfmt.UUID("123")
@@ -560,12 +576,11 @@ func TestFinderExists(t *testing.T) {
 
 func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 	var (
-		ids   = []strfmt.UUID{"10", "20", "30"}
-		cls   = "C1"
-		shard = "SH1"
-		nodes = []string{"A", "B", "C"}
-		ctx   = context.Background()
-		// result    = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+		ids        = []strfmt.UUID{"10", "20", "30"}
+		cls        = "C1"
+		shard      = "SH1"
+		nodes      = []string{"A", "B", "C"}
+		ctx        = context.Background()
 		nilObjects = []*storobj.Object(nil)
 	)
 
@@ -573,14 +588,18 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 2, false),
+				replica(ids[2], 3, false),
+			}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 1},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
@@ -595,46 +614,56 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 2, false),
+				replica(ids[2], 3, false),
+			}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 1},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 	t.Run("OneOutOfThreeObjectsExists", func(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{nil, object(ids[1], 2), nil}
+			directR = []objects.Replica{{}, replica(ids[1], 2, false), {}}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 0},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 0},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("RepairDirectRead", func(t *testing.T) {
 		var (
-			f        = newFakeFactory("C1", shard, nodes)
-			finder   = f.newFinder()
-			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			directR = []objects.Replica{
+				replica(ids[0], 4, false),
+				replica(ids[1], 5, false),
+				replica(ids[2], 6, false),
+			}
 			digestR2 = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 4},
 				{ID: ids[1].String(), UpdateTime: 2},
@@ -645,8 +674,9 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 5},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 
@@ -657,11 +687,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			got := a[4].([]*objects.VObject)
 			want := []*objects.VObject{
 				{
-					LatestObject:    &result[1].Object,
+					LatestObject:    &directR[1].Object.Object,
 					StaleUpdateTime: 2,
 				},
 				{
-					LatestObject:    &result[2].Object,
+					LatestObject:    &directR[2].Object.Object,
 					StaleUpdateTime: 3,
 				},
 			}
@@ -675,11 +705,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			got := a[4].([]*objects.VObject)
 			want := []*objects.VObject{
 				{
-					LatestObject:    &result[0].Object,
+					LatestObject:    &directR[0].Object.Object,
 					StaleUpdateTime: 1,
 				},
 				{
-					LatestObject:    &result[2].Object,
+					LatestObject:    &directR[2].Object.Object,
 					StaleUpdateTime: 3,
 				},
 			}
@@ -688,7 +718,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 
 		got, err := finder.GetAllV2(ctx, All, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("RepairDirectRead3", func(t *testing.T) {
@@ -702,10 +732,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[2], 4), // latest
 
 			}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 
 			digestR2 = []RepairResponse{
@@ -718,11 +748,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 1},
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[1], 3),
+			directR2 = []objects.Replica{
+				replica(ids[1], 3, false),
 			}
-			directR3 = []*storobj.Object{
-				object(ids[2], 4),
+			directR3 = []objects.Replica{
+				replica(ids[2], 4, false),
 			}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
@@ -831,12 +861,12 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				object(ids[3], 4), // latest
 				object(ids[4], 3),
 			}
-			directR = []*storobj.Object{
-				object(ids[0], 1),
-				object(ids[1], 1),
-				object(ids[2], 2),
-				object(ids[3], 4), // latest
-				object(ids[4], 2),
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 2, false),
+				replica(ids[3], 4, false), // latest
+				replica(ids[4], 2, false),
 			}
 			digestR2 = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 2}, // latest
@@ -852,13 +882,13 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[3].String(), UpdateTime: 1},
 				{ID: ids[4].String(), UpdateTime: 3}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 2),
+			directR2 = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 2, false),
 			}
-			directR3 = []*storobj.Object{
-				object(ids[2], 3),
-				object(ids[4], 3),
+			directR3 = []objects.Replica{
+				replica(ids[2], 3, false),
+				replica(ids[4], 3, false),
 			}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
@@ -976,9 +1006,13 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 
 	t.Run("RepairChangedObject", func(t *testing.T) {
 		var (
-			f        = newFakeFactory("C1", shard, nodes)
-			finder   = f.newFinder()
-			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+			result = []objects.Replica{
+				replica(ids[0], 4, false),
+				replica(ids[1], 5, false),
+				replica(ids[2], 6, false),
+			}
 			digestR2 = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 4},
 				{ID: ids[1].String(), UpdateTime: 2},
@@ -1006,11 +1040,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			got := a[4].([]*objects.VObject)
 			want := []*objects.VObject{
 				{
-					LatestObject:    &result[1].Object,
+					LatestObject:    &result[1].Object.Object,
 					StaleUpdateTime: 2,
 				},
 				{
-					LatestObject:    &result[2].Object,
+					LatestObject:    &result[2].Object.Object,
 					StaleUpdateTime: 3,
 				},
 			}
@@ -1024,11 +1058,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			got := a[4].([]*objects.VObject)
 			want := []*objects.VObject{
 				{
-					LatestObject:    &result[0].Object,
+					LatestObject:    &result[0].Object.Object,
 					StaleUpdateTime: 1,
 				},
 				{
-					LatestObject:    &result[2].Object,
+					LatestObject:    &result[2].Object.Object,
 					StaleUpdateTime: 3,
 				},
 			}
@@ -1047,10 +1081,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 
 			digestR2 = []RepairResponse{
@@ -1063,11 +1097,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 1},
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[1], 3),
+			directR2 = []objects.Replica{
+				replica(ids[1], 3, false),
 			}
-			directR3 = []*storobj.Object{
-				object(ids[2], 4),
+			directR3 = []objects.Replica{
+				replica(ids[2], 4, false),
 			}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).
@@ -1123,10 +1157,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 
 			digestR2 = []RepairResponse{
@@ -1139,11 +1173,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 1},
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[1], 3),
+			directR2 = []objects.Replica{
+				replica(ids[1], 3, false),
 			}
-			directR3 = []*storobj.Object{
-				object(ids[2], 4),
+			directR3 = []objects.Replica{
+				replica(ids[2], 4, false),
 			}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
@@ -1165,10 +1199,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 
 			digestR2 = []RepairResponse{
@@ -1181,10 +1215,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 1},
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[1], 3),
+			directR2 = []objects.Replica{
+				replica(ids[1], 3, false),
 			}
-			directR3 = []*storobj.Object{}
+			directR3 = []objects.Replica{}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
@@ -1204,10 +1238,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 
 			digestR2 = []RepairResponse{
@@ -1220,11 +1254,11 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 1},
 				{ID: ids[2].String(), UpdateTime: 4}, // latest
 			}
-			directR2 = []*storobj.Object{
-				object(ids[1], 3),
+			directR2 = []objects.Replica{
+				replica(ids[1], 3, false),
 			}
-			directR3 = []*storobj.Object{
-				object(ids[2], 3), // 3 instead of 4
+			directR3 = []objects.Replica{
+				replica(ids[2], 3, false), // 3 instead of 4
 			}
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
@@ -1245,10 +1279,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{ // has 2 instead of 3 objects
-				object(ids[0], 2),
-				// object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{ // has 2 instead of 3 objects
+				replica(ids[0], 2, false),
+				// replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 			digestR2 = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 1},
@@ -1282,10 +1316,10 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
 			ids     = []strfmt.UUID{"1", "2", "3"}
-			directR = []*storobj.Object{
-				object(ids[0], 2),
-				object(ids[1], 1),
-				object(ids[2], 1),
+			directR = []objects.Replica{
+				replica(ids[0], 2, false),
+				replica(ids[1], 1, false),
+				replica(ids[2], 1, false),
 			}
 			digestR2 = []RepairResponse{ // has 2 instead of 3 objects
 				{ID: ids[0].String(), UpdateTime: 1},
@@ -1322,21 +1356,24 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 		shard = "SH1"
 		nodes = []string{"A", "B", "C"}
 		ctx   = context.Background()
-		// nilObjects = []*storobj.Object(nil)
 	)
 
 	t.Run("AllButOne", func(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 2, false),
+				replica(ids[2], 3, false),
+			}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 1},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
@@ -1350,47 +1387,61 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 2, false),
+				replica(ids[2], 3, false),
+			}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 1},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
 		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("OneOutOfThreeObjectsExists", func(t *testing.T) {
 		var (
 			f       = newFakeFactory("C1", shard, nodes)
 			finder  = f.newFinder()
-			result  = []*storobj.Object{nil, object(ids[1], 2), nil}
+			directR = []objects.Replica{
+				{},
+				replica(ids[1], 2, false),
+				{},
+			}
 			digestR = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 0},
 				{ID: ids[1].String(), UpdateTime: 2},
 				{ID: ids[2].String(), UpdateTime: 0},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
 		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("RepairDirectRead", func(t *testing.T) {
 		var (
-			f        = newFakeFactory("C1", shard, nodes)
-			finder   = f.newFinder()
-			result   = []*storobj.Object{object(ids[0], 4), object(ids[1], 5), object(ids[2], 6)}
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			directR = []objects.Replica{
+				replica(ids[0], 4, false),
+				replica(ids[1], 5, false),
+				replica(ids[2], 6, false),
+			}
 			digestR2 = []RepairResponse{
 				{ID: ids[0].String(), UpdateTime: 4},
 				{ID: ids[1].String(), UpdateTime: 2},
@@ -1401,8 +1452,9 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 				{ID: ids[1].String(), UpdateTime: 5},
 				{ID: ids[2].String(), UpdateTime: 3},
 			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
 		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
@@ -1412,11 +1464,11 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 			got := a[4].([]*objects.VObject)
 			want := []*objects.VObject{
 				{
-					LatestObject:    &result[0].Object,
+					LatestObject:    &directR[0].Object.Object,
 					StaleUpdateTime: 1,
 				},
 				{
-					LatestObject:    &result[2].Object,
+					LatestObject:    &directR[2].Object.Object,
 					StaleUpdateTime: 3,
 				},
 			}
@@ -1425,18 +1477,18 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 
 		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 }
 
 func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 	var (
-		ids        = []strfmt.UUID{"10", "20", "30"}
-		cls        = "C1"
-		shard      = "SH1"
-		nodes      = []string{"A", "B", "C"}
-		ctx        = context.Background()
-		nilObjects = []*storobj.Object(nil)
+		ids      = []strfmt.UUID{"10", "20", "30"}
+		cls      = "C1"
+		shard    = "SH1"
+		nodes    = []string{"A", "B", "C"}
+		ctx      = context.Background()
+		nilItems = []objects.Replica(nil)
 	)
 
 	t.Run("AllButOne", func(t *testing.T) {
@@ -1445,7 +1497,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 			finder = f.newFinder()
 		)
 		for _, n := range nodes {
-			f.RClient.On("FetchObjects", anyVal, n, cls, shard, ids).Return(nilObjects, errAny)
+			f.RClient.On("FetchObjects", anyVal, n, cls, shard, ids).Return(nilItems, errAny)
 		}
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
@@ -1456,28 +1508,34 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 
 	t.Run("Success", func(t *testing.T) {
 		var (
-			f      = newFakeFactory("C1", shard, nodes)
-			finder = f.newFinder()
-			result = []*storobj.Object{object(ids[0], 1), object(ids[1], 2), object(ids[2], 3)}
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			directR = []objects.Replica{
+				replica(ids[0], 1, false),
+				replica(ids[1], 2, false),
+				replica(ids[2], 3, false),
+			}
+			want = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 
 	t.Run("OneOutOfThreeObjectsExists", func(t *testing.T) {
 		var (
-			f      = newFakeFactory("C1", shard, nodes)
-			finder = f.newFinder()
-			result = []*storobj.Object{nil, object(ids[1], 2), nil}
+			f       = newFakeFactory("C1", shard, nodes)
+			finder  = f.newFinder()
+			directR = []objects.Replica{{}, replica(ids[1], 2, false), {}}
+			want    = fromReplicas(directR)
 		)
-		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(result, errAny)
-		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, ids).Return(result, nil)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, errAny)
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, ids).Return(directR, nil)
 
 		got, err := finder.GetAllV2(ctx, One, shard, ids)
 		assert.Nil(t, err)
-		assert.Equal(t, result, got)
+		assert.Equal(t, want, got)
 	})
 }
