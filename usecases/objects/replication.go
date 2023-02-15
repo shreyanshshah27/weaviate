@@ -80,4 +80,10 @@ type Replica struct {
 	Object  *storobj.Object `json:"object,omitempty"`
 }
 
-// TODO Marshal and Unmarshal
+// UpdateTime return update time if it exists and 0 otherwise
+func (r Replica) UpdateTime() int64 {
+	if r.Object != nil {
+		return r.Object.LastUpdateTimeUnix()
+	}
+	return 0
+}

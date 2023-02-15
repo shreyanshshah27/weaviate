@@ -25,8 +25,16 @@ import (
 	"github.com/weaviate/weaviate/usecases/objects"
 )
 
-// ErrConsistencyLevel consistency level cannot be achieved
-var ErrConsistencyLevel = errors.New("cannot achieve consistency level")
+var (
+	// ErrConsistencyLevel consistency level cannot be achieved
+	ErrConsistencyLevel = errors.New("cannot achieve consistency level")
+	// errConflictFindDeleted object exists on one replica but is deleted on the other.
+	//
+	// It depends on the order of operations
+	// Created -> Deleted    => It is safe in this case to propagate deletion to all replicas
+	// Created -> Deleted -> Created => propagating deletion will result in data lost
+	errConflictExistOrDeleted = errors.New("conflict: object has been deleted on another replica")
+)
 
 type (
 	// senderReply represent the data received from a sender
@@ -47,6 +55,8 @@ type Finder struct {
 	RClient            // needed to commit and abort operation
 	resolver *resolver // host names of replicas
 	class    string
+	// TODO LOGGER
+	// Don't leak host nodes to end user but log it
 }
 
 // NewFinder constructs a new finder instance
@@ -66,18 +76,14 @@ func NewFinder(className string,
 }
 
 // GetOne gets object which satisfies the giving consistency
-func (f *Finder) GetOneV2(ctx context.Context, l ConsistencyLevel, shard string,
+func (f *Finder) GetOne(ctx context.Context, l ConsistencyLevel, shard string,
 	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
 ) (*storobj.Object, error) {
 	c := newReadCoordinator[findOneReply](f, shard)
 	op := func(ctx context.Context, host string, fullRead bool) (findOneReply, error) {
 		if fullRead {
 			r, err := f.FetchObject(ctx, host, f.class, shard, id, props, additional)
-			var uTime int64
-			if r.Object != nil {
-				uTime = r.Object.LastUpdateTimeUnix()
-			}
-			return findOneReply{host, -1, r, uTime, false}, err
+			return findOneReply{host, 0, r, r.UpdateTime(), false}, err
 		} else {
 			xs, err := f.DigestObjects(ctx, host, f.class, shard, []strfmt.UUID{id})
 			var x RepairResponse
@@ -87,7 +93,8 @@ func (f *Finder) GetOneV2(ctx context.Context, l ConsistencyLevel, shard string,
 			if err == nil && len(xs) != 1 {
 				err = fmt.Errorf("digest read request: empty result")
 			}
-			return findOneReply{host, x.Version, objects.Replica{}, x.UpdateTime, true}, err
+			r := objects.Replica{ID: id, Deleted: x.Deleted}
+			return findOneReply{host, x.Version, r, x.UpdateTime, true}, err
 		}
 	}
 	replyCh, state, err := c.Fetch2(ctx, l, op)
@@ -141,7 +148,12 @@ func (f *Finder) NodeObject(ctx context.Context, nodeName, shard string,
 	return r.Object, err
 }
 
-func (f *Finder) readOne(ctx context.Context, shard string, id strfmt.UUID, ch <-chan simpleResult[findOneReply], st rState) <-chan result[*storobj.Object] {
+func (f *Finder) readOne(ctx context.Context,
+	shard string,
+	id strfmt.UUID,
+	ch <-chan simpleResult[findOneReply],
+	st rState,
+) <-chan result[*storobj.Object] {
 	// counters tracks the number of votes for each participant
 	resultCh := make(chan result[*storobj.Object], 1)
 	go func() {
@@ -215,30 +227,22 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, co
 		winnerIdx int
 	)
 	for i, x := range counters {
+		if x.o.Deleted {
+			return nil, errConflictExistOrDeleted
+		}
 		if x.UTime > lastUTime {
 			lastUTime = x.UTime
 			winnerIdx = i
 		}
 	}
 
-	if lastUTime < 1 {
-		return nil, fmt.Errorf("nil object")
-	}
-
 	updates := counters[contentIdx].o
 	winner := counters[winnerIdx]
-	if updates.Object.LastUpdateTimeUnix() != lastUTime {
+	if updates.UpdateTime() != lastUTime {
 		updates, err = f.RClient.FetchObject(ctx, winner.sender, f.class, shard, id,
 			search.SelectProperties{}, additional.Properties{})
 		if err != nil {
 			return nil, fmt.Errorf("get most recent object from %s: %w", counters[winnerIdx].sender, err)
-		}
-	}
-
-	isNewObject := lastUTime == updates.Object.CreationTimeUnix()
-	for _, x := range counters {
-		if x.UTime == 0 && !isNewObject {
-			return nil, fmt.Errorf("conflict: object might have been deleted on node %q", x.sender)
 		}
 	}
 
