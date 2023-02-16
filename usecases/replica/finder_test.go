@@ -603,7 +603,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, nodes[1])
 		assert.ErrorContains(t, err, err.Error())
@@ -630,7 +630,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -650,7 +650,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, nil)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -716,7 +716,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -844,7 +844,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, result, got)
 	})
@@ -999,7 +999,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, result, got)
 	})
@@ -1069,7 +1069,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.Equal(t, nilObjects, got)
 		assert.Contains(t, err.Error(), "conflict")
@@ -1145,7 +1145,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			Return(repairR3, nil).
 			Once()
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, errAny.Error())
 		assert.Equal(t, []*storobj.Object(nil), got)
@@ -1188,7 +1188,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
 		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, errAny)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, errAny.Error())
 		assert.Equal(t, []*storobj.Object(nil), got)
@@ -1228,7 +1228,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
 		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.Equal(t, []*storobj.Object(nil), got)
 	})
@@ -1269,7 +1269,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil)
 		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil)
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.Equal(t, []*storobj.Object(nil), got)
 	})
@@ -1305,7 +1305,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			Return(digestR3, nil).
 			Once()
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.NotNil(t, err)
 		assert.Equal(t, []*storobj.Object(nil), got)
 		assert.ErrorContains(t, err, nodes[0])
@@ -1342,7 +1342,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			Return(digestR3, nil).
 			Once()
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.NotNil(t, err)
 		assert.Equal(t, []*storobj.Object(nil), got)
 		assert.ErrorContains(t, err, nodes[0])
@@ -1466,7 +1466,7 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		got, err := finder.GetAll(ctx, All, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, errConflictExistOrDeleted.Error())
 		assert.Equal(t, result, got)
@@ -1501,7 +1501,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, errAny)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
-		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		got, err := finder.GetAll(ctx, Quorum, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, err.Error())
 		assert.Nil(t, got)
@@ -1527,7 +1527,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
-		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		got, err := finder.GetAll(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -1552,7 +1552,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR, nil)
 		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR, errAny)
 
-		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		got, err := finder.GetAll(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -1599,7 +1599,7 @@ func TestFinderGetAllWithConsistencyLevelQuorum(t *testing.T) {
 			assert.ElementsMatch(t, want, got)
 		}
 
-		got, err := finder.GetAllV2(ctx, Quorum, shard, ids)
+		got, err := finder.GetAll(ctx, Quorum, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -1624,7 +1624,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 			f.RClient.On("FetchObjects", anyVal, n, cls, shard, ids).Return(nilItems, errAny)
 		}
 
-		got, err := finder.GetAllV2(ctx, One, shard, ids)
+		got, err := finder.GetAll(ctx, One, shard, ids)
 		assert.ErrorIs(t, err, ErrConsistencyLevel)
 		assert.ErrorContains(t, err, errAny.Error())
 		assert.Nil(t, got)
@@ -1643,7 +1643,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 		)
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
 
-		got, err := finder.GetAllV2(ctx, One, shard, ids)
+		got, err := finder.GetAll(ctx, One, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})
@@ -1658,7 +1658,7 @@ func TestFinderGetAllWithConsistencyLevelOne(t *testing.T) {
 		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, errAny)
 		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, ids).Return(directR, nil)
 
-		got, err := finder.GetAllV2(ctx, One, shard, ids)
+		got, err := finder.GetAll(ctx, One, shard, ids)
 		assert.Nil(t, err)
 		assert.Equal(t, want, got)
 	})

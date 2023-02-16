@@ -47,7 +47,6 @@ type (
 	}
 	findOneReply    senderReply[objects.Replica]
 	existReply      senderReply[bool]
-	getObjectsReply senderReply[[]*storobj.Object]
 )
 
 // Finder finds replicated objects
@@ -106,6 +105,7 @@ func (f *Finder) GetOne(ctx context.Context, l ConsistencyLevel, shard string,
 }
 
 // Exists checks if an object exists which satisfies the giving consistency
+// TODO: implement using new approach
 func (f *Finder) Exists(ctx context.Context, l ConsistencyLevel, shard string, id strfmt.UUID) (bool, error) {
 	c := newReadCoordinator[existReply](f, shard)
 	op := func(ctx context.Context, host string) (existReply, error) {
@@ -272,7 +272,7 @@ type batchReply struct {
 }
 
 // GetAll gets all objects which satisfy the giving consistency
-func (f *Finder) GetAllV2(ctx context.Context, l ConsistencyLevel, shard string,
+func (f *Finder) GetAll(ctx context.Context, l ConsistencyLevel, shard string,
 	ids []strfmt.UUID,
 ) ([]*storobj.Object, error) {
 	c := newReadCoordinator[batchReply](f, shard)
@@ -315,17 +315,6 @@ func (r batchReply) UpdateTimeAt(idx int) int64 {
 		return r.DigestData[idx].UpdateTime
 	}
 	return r.DirectData[idx].UpdateTime()
-	// else if x := r.DirectData[idx]; x != nil {
-	// 	return x.LastUpdateTimeUnix()
-	// }
-	// return 0
-}
-
-func (r batchReply) Deleted(idx int) bool {
-	if len(r.DigestData) != 0 {
-		return r.DigestData[idx].Deleted
-	}
-	return r.DirectData[idx].Deleted
 }
 
 type _Results result[[]*storobj.Object]
@@ -434,7 +423,7 @@ func (f *Finder) repairAll(ctx context.Context,
 			}
 		}
 		partitions = append(partitions, len(ms))
-		//
+		// TODO parallel fetch
 		start := 0
 		for _, end := range partitions { // fetch diffs
 			receiver := votes[ms[start].S].Sender
@@ -462,9 +451,10 @@ func (f *Finder) repairAll(ctx context.Context,
 	}
 
 	// repair
+	// TODO parallel overwrite
 	for _, vote := range votes {
 		receiver := vote.Sender
-		query := make([]*objects.VObject, 0, len(ids))
+		query := make([]*objects.VObject, 0, len(ids)/2)
 		for j, x := range lastTimes {
 			if cTime := vote.UpdateTimeAt(j); x.T != cTime && !x.Deleted {
 				query = append(query, &objects.VObject{LatestObject: &result[j].Object, StaleUpdateTime: cTime})
