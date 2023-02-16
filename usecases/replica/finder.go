@@ -321,6 +321,13 @@ func (r batchReply) UpdateTimeAt(idx int) int64 {
 	// return 0
 }
 
+func (r batchReply) Deleted(idx int) bool {
+	if len(r.DigestData) != 0 {
+		return r.DigestData[idx].Deleted
+	}
+	return r.DirectData[idx].Deleted
+}
+
 type _Results result[[]*storobj.Object]
 
 func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, ch <-chan simpleResult[batchReply], st rState) <-chan _Results {
@@ -384,26 +391,32 @@ func (f *Finder) repairAll(ctx context.Context,
 	contentIdx int,
 ) ([]*storobj.Object, error) {
 	var (
-		result    = make([]*storobj.Object, len(ids)) // final result
-		lastTimes = make([]iTuple, len(ids))          // most recent times
-		ms        = make([]iTuple, 0, len(ids))       // mismatches
+		result     = make([]*storobj.Object, len(ids)) // final result
+		lastTimes  = make([]iTuple, len(ids))          // most recent times
+		ms         = make([]iTuple, 0, len(ids))       // mismatches
+		nDeletions = 0
 	)
 	// find most recent objects
 	for i, x := range votes[contentIdx].DirectData {
-		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.UpdateTime()}
+		lastTimes[i] = iTuple{S: contentIdx, O: i, T: x.UpdateTime(), Deleted: x.Deleted}
 	}
 	for i, vote := range votes {
 		if i != contentIdx {
 			for j, x := range vote.DigestData {
+				deleted := lastTimes[j].Deleted || x.Deleted
 				if x.UpdateTime > lastTimes[j].T {
 					lastTimes[j] = iTuple{S: i, O: j, T: x.UpdateTime}
 				}
+				lastTimes[j].Deleted = deleted
 			}
 		}
 	}
 	// find missing content (diff)
 	for i, p := range votes[contentIdx].DirectData {
-		if contentIdx != lastTimes[i].S {
+		if lastTimes[i].Deleted { // conflict
+			nDeletions++
+			result[i] = nil
+		} else if contentIdx != lastTimes[i].S {
 			ms = append(ms, lastTimes[i])
 		} else {
 			result[i] = p.Object
@@ -453,7 +466,7 @@ func (f *Finder) repairAll(ctx context.Context,
 		receiver := vote.Sender
 		query := make([]*objects.VObject, 0, len(ids))
 		for j, x := range lastTimes {
-			if cTime := vote.UpdateTimeAt(j); x.T != cTime {
+			if cTime := vote.UpdateTimeAt(j); x.T != cTime && !x.Deleted {
 				query = append(query, &objects.VObject{LatestObject: &result[j].Object, StaleUpdateTime: cTime})
 			}
 		}
@@ -470,13 +483,17 @@ func (f *Finder) repairAll(ctx context.Context,
 			}
 		}
 	}
+	if nDeletions > 0 {
+		return result, errConflictExistOrDeleted
+	}
 
 	return result, nil
 }
 
 // iTuple tuple of indices used to identify a unique object
 type iTuple struct {
-	S int   // sender's index
-	O int   // object's index
-	T int64 // last update time
+	S       int   // sender's index
+	O       int   // object's index
+	T       int64 // last update time
+	Deleted bool
 }

@@ -27,6 +27,31 @@ import (
 	"github.com/weaviate/weaviate/usecases/objects"
 )
 
+func object(id strfmt.UUID, lastTime int64) *storobj.Object {
+	return &storobj.Object{
+		Object: models.Object{
+			ID:                 id,
+			LastUpdateTimeUnix: lastTime,
+		},
+	}
+}
+
+func replica(id strfmt.UUID, lastTime int64, deleted bool) objects.Replica {
+	x := objects.Replica{
+		Deleted: deleted,
+		Object: &storobj.Object{
+			Object: models.Object{
+				ID:                 id,
+				LastUpdateTimeUnix: lastTime,
+			},
+		},
+	}
+	if !x.Deleted {
+		x.ID = id
+	}
+	return x
+}
+
 func TestFinderReplicaNotFound(t *testing.T) {
 	var (
 		factory = newFakeFactory("C1", "S", []string{})
@@ -69,31 +94,6 @@ func TestFinderNodeObject(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, r.Object, got)
 	})
-}
-
-func object(id strfmt.UUID, lastTime int64) *storobj.Object {
-	return &storobj.Object{
-		Object: models.Object{
-			ID:                 id,
-			LastUpdateTimeUnix: lastTime,
-		},
-	}
-}
-
-func replica(id strfmt.UUID, lastTime int64, deleted bool) objects.Replica {
-	x := objects.Replica{
-		Deleted: deleted,
-		Object: &storobj.Object{
-			Object: models.Object{
-				ID:                 id,
-				LastUpdateTimeUnix: lastTime,
-			},
-		},
-	}
-	if !x.Deleted {
-		x.ID = id
-	}
-	return x
 }
 
 func TestFinderGetOneWithConsistencyLevelALL(t *testing.T) {
@@ -326,8 +326,8 @@ func TestFinderGetOneWithConsistencyLevelALL(t *testing.T) {
 			f         = newFakeFactory("C1", shard, nodes)
 			finder    = f.newFinder()
 			digestIDs = []strfmt.UUID{id}
-			item      = objects.Replica{ID: id, Object: object(id, 3)}
-			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 0, Deleted: true}}
+			item      = objects.Replica{ID: id, Object: nil, Deleted: true}
+			digestR2  = []RepairResponse{{ID: id.String(), UpdateTime: 3, Deleted: false}}
 			digestR3  = []RepairResponse{{ID: id.String(), UpdateTime: 3, Deleted: false}}
 		)
 		f.RClient.On("FetchObject", anyVal, nodes[0], cls, shard, id, proj, adds).Return(item, nil)
@@ -1346,6 +1346,130 @@ func TestFinderGetAllWithConsistencyLevelAll(t *testing.T) {
 		assert.NotNil(t, err)
 		assert.Equal(t, []*storobj.Object(nil), got)
 		assert.ErrorContains(t, err, nodes[0])
+	})
+
+	t.Run("RepairMissingObject", func(t *testing.T) {
+		var (
+			f      = newFakeFactory("C1", shard, nodes)
+			finder = f.newFinder()
+			ids    = []strfmt.UUID{"1", "2", "3", "4", "5"}
+			result = []*storobj.Object{
+				nil,
+				nil,
+				nil,
+				object(ids[3], 4), // latest
+				object(ids[4], 3),
+			}
+			directR = []objects.Replica{
+				replica(ids[0], 0, true),
+				replica(ids[1], 1, false),
+				replica(ids[2], 2, false),
+				replica(ids[3], 4, false), // latest
+				replica(ids[4], 2, false),
+			}
+			digestR2 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 2}, // latest
+				{ID: ids[1].String(), UpdateTime: 0, Deleted: true},
+				{ID: ids[2].String(), UpdateTime: 1},
+				{ID: ids[3].String(), UpdateTime: 1},
+				{ID: ids[4].String(), UpdateTime: 1},
+			}
+			digestR3 = []RepairResponse{
+				{ID: ids[0].String(), UpdateTime: 1},
+				{ID: ids[1].String(), UpdateTime: 1},
+				{ID: ids[2].String(), UpdateTime: 0, Deleted: true},
+				{ID: ids[3].String(), UpdateTime: 1},
+				{ID: ids[4].String(), UpdateTime: 3}, // latest
+			}
+			directR2 = []objects.Replica{
+				replica(ids[0], 2, false),
+			}
+			directR3 = []objects.Replica{
+				replica(ids[4], 3, false),
+			}
+		)
+		f.RClient.On("FetchObjects", anyVal, nodes[0], cls, shard, ids).Return(directR, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[1], cls, shard, ids).Return(digestR2, nil)
+		f.RClient.On("DigestObjects", anyVal, nodes[2], cls, shard, ids).Return(digestR3, nil)
+
+		// fetch most recent objects
+		f.RClient.On("FetchObjects", anyVal, nodes[1], cls, shard, anyVal).Return(directR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]strfmt.UUID)
+			assert.ElementsMatch(t, ids[1:2], got)
+		}
+		f.RClient.On("FetchObjects", anyVal, nodes[2], cls, shard, anyVal).Return(directR3, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]strfmt.UUID)
+			assert.ElementsMatch(t, []strfmt.UUID{ids[4]}, got)
+		}
+
+		// repair
+		var (
+			overwriteR1 = []RepairResponse{
+				{ID: ids[4].String(), UpdateTime: 2},
+			}
+			overwriteR2 = []RepairResponse{
+				{ID: ids[3].String(), UpdateTime: 1},
+				{ID: ids[4].String(), UpdateTime: 1},
+			}
+			overwriteR3 = []RepairResponse{
+				{ID: ids[3].String(), UpdateTime: 1},
+			}
+		)
+		f.RClient.On("OverwriteObjects", anyVal, nodes[0], cls, shard, anyVal).
+			Return(overwriteR1, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[4].Object,
+					StaleUpdateTime: 2,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+
+		f.RClient.On("OverwriteObjects", anyVal, nodes[1], cls, shard, anyVal).
+			Return(overwriteR2, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[3].Object,
+					StaleUpdateTime: 1,
+				},
+				{
+					LatestObject:    &result[4].Object,
+					StaleUpdateTime: 1,
+				},
+			}
+
+			assert.ElementsMatch(t, want, got)
+		}
+		f.RClient.On("OverwriteObjects", anyVal, nodes[2], cls, shard, anyVal).
+			Return(overwriteR3, nil).
+			Once().
+			RunFn = func(a mock.Arguments) {
+			got := a[4].([]*objects.VObject)
+			want := []*objects.VObject{
+				{
+					LatestObject:    &result[3].Object,
+					StaleUpdateTime: 1,
+				},
+			}
+			assert.ElementsMatch(t, want, got)
+		}
+
+		got, err := finder.GetAllV2(ctx, All, shard, ids)
+		assert.ErrorIs(t, err, ErrConsistencyLevel)
+		assert.ErrorContains(t, err, errConflictExistOrDeleted.Error())
+		assert.Equal(t, result, got)
 	})
 }
 

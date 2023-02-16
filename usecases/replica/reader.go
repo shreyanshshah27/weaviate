@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/weaviate/weaviate/entities/storobj"
 	"github.com/weaviate/weaviate/usecases/objects"
 )
 
@@ -71,11 +70,4 @@ func readOneExists(ch <-chan simpleResult[existReply], st rState) (bool, error) 
 		}
 	}
 	return false, fmt.Errorf("%w %q %s", ErrConsistencyLevel, st.CLevel, sb.String())
-}
-
-type osTuple struct {
-	sender string
-	data   []*storobj.Object
-	acks   []int
-	err    error
 }
