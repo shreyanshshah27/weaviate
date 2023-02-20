@@ -23,6 +23,7 @@ import (
 	"github.com/weaviate/weaviate/entities/search"
 	"github.com/weaviate/weaviate/entities/storobj"
 	"github.com/weaviate/weaviate/usecases/objects"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -286,23 +287,29 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, vo
 		}
 	}
 
+	var gr errgroup.Group
 	for _, c := range votes { // repair
-		if c.UTime != lastUTime {
-			updates := []*objects.VObject{{
+		if c.UTime == lastUTime {
+			continue
+		}
+		c := c
+		gr.Go(func() error {
+			ups := []*objects.VObject{{
 				LatestObject:    &updates.Object.Object,
 				StaleUpdateTime: c.UTime,
-				Version:         0, // todo set when implemented
 			}}
-			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
+			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, ups)
 			if err != nil {
-				return nil, fmt.Errorf("node %q could not repair object: %w", c.sender, err)
+				return fmt.Errorf("node %q could not repair object: %w", c.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
-				return nil, fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
+				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
 			}
-		}
+			return nil
+		})
 	}
-	return updates.Object, nil
+
+	return updates.Object, gr.Wait()
 }
 
 type vote struct {
