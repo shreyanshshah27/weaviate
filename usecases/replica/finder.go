@@ -288,22 +288,22 @@ func (f *Finder) repairOne(ctx context.Context, shard string, id strfmt.UUID, vo
 	}
 
 	var gr errgroup.Group
-	for _, c := range votes { // repair
-		if c.UTime == lastUTime {
+	for _, vote := range votes { // repair
+		if vote.UTime == lastUTime {
 			continue
 		}
-		c := c
+		vote := vote
 		gr.Go(func() error {
 			ups := []*objects.VObject{{
 				LatestObject:    &updates.Object.Object,
-				StaleUpdateTime: c.UTime,
+				StaleUpdateTime: vote.UTime,
 			}}
-			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, ups)
+			resp, err := f.RClient.OverwriteObjects(ctx, vote.sender, f.class, shard, ups)
 			if err != nil {
-				return fmt.Errorf("node %q could not repair object: %w", c.sender, err)
+				return fmt.Errorf("node %q could not repair object: %w", vote.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
-				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
+				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, vote.sender, resp[0].Err)
 			}
 			return nil
 		})
@@ -374,6 +374,9 @@ func (f *Finder) readAll(ctx context.Context, shard string, ids []strfmt.UUID, c
 			}
 		}
 		res, err := f.repairAll(ctx, shard, ids, votes, st, contentIdx)
+		if err != nil {
+			res = nil
+		}
 		resultCh <- _Results{res, err}
 	}()
 
@@ -431,7 +434,9 @@ func (f *Finder) repairAll(ctx context.Context,
 			}
 		}
 		partitions = append(partitions, len(ms))
-		// TODO parallel fetch
+
+		// concurrent fetches
+		gr, ctx := errgroup.WithContext(ctx)
 		start := 0
 		for _, end := range partitions { // fetch diffs
 			receiver := votes[ms[start].S].Sender
@@ -440,28 +445,34 @@ func (f *Finder) repairAll(ctx context.Context,
 				query[j] = ids[ms[start].O]
 				j++
 			}
-			resp, err := f.RClient.FetchObjects(ctx, receiver, f.class, shard, query)
-			if err != nil {
-				return nil, err
-			}
-			n := len(query)
-			if m := len(resp); n != m {
-				return nil, fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)
-			}
-			for i := 0; i < n; i++ {
-				idx := ms[start-n+i].O
-				if lastTimes[idx].T != resp[i].UpdateTime() {
-					return nil, fmt.Errorf("object %s changed on %s", ids[idx], receiver)
+			start := start
+			gr.Go(func() error {
+				resp, err := f.RClient.FetchObjects(ctx, receiver, f.class, shard, query)
+				if err != nil {
+					return err
 				}
-				result[idx] = resp[i].Object
+				n := len(query)
+				if m := len(resp); n != m {
+					return fmt.Errorf("try to fetch %d objects from %s but got %d", m, receiver, n)
+				}
+				for i := 0; i < n; i++ {
+					idx := ms[start-n+i].O
+					if lastTimes[idx].T != resp[i].UpdateTime() {
+						return fmt.Errorf("object %s changed on %s", ids[idx], receiver)
+					}
+					result[idx] = resp[i].Object
+				}
+				return nil
+			})
+			if err := gr.Wait(); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	// repair
-	// TODO parallel overwrite
+	// concurrent repairs
+	gr, ctx := errgroup.WithContext(ctx)
 	for _, vote := range votes {
-		receiver := vote.Sender
 		query := make([]*objects.VObject, 0, len(ids)/2)
 		for j, x := range lastTimes {
 			if cTime := vote.UpdateTimeAt(j); x.T != cTime && !x.Deleted {
@@ -471,21 +482,26 @@ func (f *Finder) repairAll(ctx context.Context,
 		if len(query) == 0 {
 			continue
 		}
-		rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
-		if err != nil {
-			return nil, fmt.Errorf("node %q could not repair objects: %w", receiver, err)
-		}
-		for _, r := range rs {
-			if r.Err != "" {
-				return nil, fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)
+		receiver := vote.Sender
+		gr.Go(func() error {
+			rs, err := f.RClient.OverwriteObjects(ctx, receiver, f.class, shard, query)
+			if err != nil {
+				return fmt.Errorf("node %q could not repair objects: %w", receiver, err)
 			}
-		}
+			for _, r := range rs {
+				if r.Err != "" {
+					return fmt.Errorf("object changed in the meantime on node %s: %s", receiver, r.Err)
+				}
+			}
+			return nil
+		})
 	}
+	err := gr.Wait()
 	if nDeletions > 0 {
 		return result, errConflictExistOrDeleted
 	}
 
-	return result, nil
+	return result, err
 }
 
 // iTuple tuple of indices used to identify a unique object
@@ -573,23 +589,23 @@ func (f *Finder) repairExist(ctx context.Context, shard string, id strfmt.UUID, 
 	if resp.UpdateTime() != lastUTime {
 		return false, fmt.Errorf("fetch new state from %s: %w, %v", winner.sender, errConflictObjectChanged, err)
 	}
-	var gr errgroup.Group
-	for _, c := range votes { // repair
-		if c.UTime == lastUTime {
+	gr, ctx := errgroup.WithContext(ctx)
+	for _, vote := range votes { // repair
+		if vote.UTime == lastUTime {
 			continue
 		}
-		c := c
+		vote := vote
 		gr.Go(func() error {
 			ups := []*objects.VObject{{
 				LatestObject:    &resp.Object.Object,
-				StaleUpdateTime: c.UTime,
+				StaleUpdateTime: vote.UTime,
 			}}
-			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, ups)
+			resp, err := f.RClient.OverwriteObjects(ctx, vote.sender, f.class, shard, ups)
 			if err != nil {
-				return fmt.Errorf("node %q could not repair object: %w", c.sender, err)
+				return fmt.Errorf("node %q could not repair object: %w", vote.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
-				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
+				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, vote.sender, resp[0].Err)
 			}
 			return nil
 		})
