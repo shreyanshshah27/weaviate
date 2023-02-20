@@ -573,22 +573,26 @@ func (f *Finder) repairExist(ctx context.Context, shard string, id strfmt.UUID, 
 	if resp.UpdateTime() != lastUTime {
 		return false, fmt.Errorf("fetch new state from %s: %w, %v", winner.sender, errConflictObjectChanged, err)
 	}
-
+	var gr errgroup.Group
 	for _, c := range votes { // repair
-		if c.UTime != lastUTime {
-			updates := []*objects.VObject{{
+		if c.UTime == lastUTime {
+			continue
+		}
+		c := c
+		gr.Go(func() error {
+			ups := []*objects.VObject{{
 				LatestObject:    &resp.Object.Object,
 				StaleUpdateTime: c.UTime,
-				// Version:         0,
 			}}
-			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, updates)
+			resp, err := f.RClient.OverwriteObjects(ctx, c.sender, f.class, shard, ups)
 			if err != nil {
-				return false, fmt.Errorf("node %q could not repair object: %w", c.sender, err)
+				return fmt.Errorf("node %q could not repair object: %w", c.sender, err)
 			}
 			if len(resp) > 0 && resp[0].Err != "" && resp[0].UpdateTime != lastUTime {
-				return false, fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
+				return fmt.Errorf("overwrite %w %s: %s", errConflictObjectChanged, c.sender, resp[0].Err)
 			}
-		}
+			return nil
+		})
 	}
-	return !resp.Deleted, nil
+	return !resp.Deleted, gr.Wait()
 }
